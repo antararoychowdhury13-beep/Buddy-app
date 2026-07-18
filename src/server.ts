@@ -2,7 +2,8 @@ import "dotenv/config";
 import express from "express";
 import { db, getOrCreateSingleUser } from "./db.js";
 import { applyFeedback } from "./trustScoreStore.js";
-import type { Domain, InsightRecord } from "./types.js";
+import type { Domain, Insight, InsightRow } from "./types.js";
+import { toInsight } from "./types.js";
 import { voiceService } from "./voice/index.js";
 
 const app = express();
@@ -33,25 +34,26 @@ app.get("/", async (_req, res) => {
     .limit(1)
     .maybeSingle();
 
-  const { data: insights } = await db
+  const { data: insightRows } = await db
     .from("insight")
     .select("*")
     .eq("user_id", user.id)
     .order("created_at", { ascending: false })
     .limit(20);
 
-  const delivered = (insights ?? []).filter((i: InsightRecord) => i.tier !== "silent");
-  const silent = (insights ?? []).filter((i: InsightRecord) => i.tier === "silent");
+  const insights = ((insightRows ?? []) as InsightRow[]).map(toInsight);
+  const delivered = insights.filter((i: Insight) => i.tier !== "silent");
+  const silent = insights.filter((i: Insight) => i.tier === "silent");
 
   const { data: trustScores } = await db
     .from("trust_score")
     .select("*")
     .eq("user_id", user.id);
 
-  const rowHtml = (i: InsightRecord) => `
+  const rowHtml = (i: Insight) => `
     <li class="insight tier-${i.tier}">
       <div class="meta"><span class="tier-badge">${i.tier}</span> <span class="domain">${i.domain}</span> <span class="confidence">confidence ${Number(i.confidence).toFixed(2)}</span></div>
-      <div class="text">${escapeHtml(i.candidate_text)}</div>
+      <div class="text">${escapeHtml(i.candidateText)}</div>
       <form method="post" action="/feedback">
         <input type="hidden" name="insightId" value="${i.id}" />
         <input type="hidden" name="domain" value="${i.domain}" />

@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "ingest": "tsx scripts/ingest.ts",
-    "test": "tsx scripts/test-trust-engine.ts"
+    "test": "tsx scripts/test-trust-engine.ts",
+    "typecheck": "tsc -p tsconfig.scripts.json"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
