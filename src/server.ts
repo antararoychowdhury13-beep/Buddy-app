@@ -3,9 +3,11 @@ import express from "express";
 import { db, getOrCreateSingleUser } from "./db.js";
 import { applyFeedback } from "./trustScoreStore.js";
 import type { Domain, InsightRecord } from "./types.js";
+import { voiceService } from "./voice/index.js";
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
 function escapeHtml(s: string): string {
   return s
@@ -73,7 +75,10 @@ app.get("/", async (_req, res) => {
 <style>
   body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
   h1 { font-size: 1.4rem; }
-  .briefing { background: #f5f5f4; border-radius: 12px; padding: 20px; font-size: 1.05rem; line-height: 1.5; }
+  .briefing-row { display: flex; align-items: flex-start; gap: 12px; }
+  .briefing { background: #f5f5f4; border-radius: 12px; padding: 20px; font-size: 1.05rem; line-height: 1.5; flex: 1; }
+  #listen-btn { flex-shrink: 0; margin-top: 4px; padding: 8px 14px; border-radius: 8px; border: 1px solid #d4d4d4; background: white; cursor: pointer; font-size: 0.95rem; }
+  #listen-btn:disabled { opacity: 0.6; cursor: default; }
   ul.insight-list { list-style: none; padding: 0; }
   li.insight { border: 1px solid #e5e5e5; border-radius: 8px; padding: 12px 14px; margin: 10px 0; }
   .meta { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: #666; margin-bottom: 6px; }
@@ -88,7 +93,48 @@ app.get("/", async (_req, res) => {
 </head>
 <body>
   <h1>Today's Briefing</h1>
-  <div class="briefing">${briefing ? escapeHtml(briefing.composed_text).replace(/\n/g, "<br/>") : "No briefing yet — run <code>npm run ingest</code>."}</div>
+  <div class="briefing-row">
+    <div class="briefing" id="briefing-text">${briefing ? escapeHtml(briefing.composed_text).replace(/\n/g, "<br/>") : "No briefing yet — run <code>npm run ingest</code>."}</div>
+    ${briefing ? `<button id="listen-btn" type="button">🔊 Listen</button>` : ""}
+  </div>
+  <audio id="briefing-audio" hidden></audio>
+  <script>
+    (function () {
+      var btn = document.getElementById("listen-btn");
+      if (!btn) return;
+      var audioEl = document.getElementById("briefing-audio");
+      var textEl = document.getElementById("briefing-text");
+      btn.addEventListener("click", function () {
+        var text = textEl.innerText;
+        btn.disabled = true;
+        var originalLabel = btn.textContent;
+        btn.textContent = "Generating…";
+        fetch("/speech", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: text }),
+        })
+          .then(function (res) {
+            if (!res.ok) throw new Error("Speech request failed: " + res.status);
+            return res.blob();
+          })
+          .then(function (blob) {
+            var url = URL.createObjectURL(blob);
+            audioEl.src = url;
+            audioEl.hidden = false;
+            return audioEl.play();
+          })
+          .catch(function (err) {
+            console.error(err);
+            alert("Could not generate speech. See console for details.");
+          })
+          .finally(function () {
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+          });
+      });
+    })();
+  </script>
 
   <h2>Delivered insights (${delivered.length})</h2>
   <ul class="insight-list">${delivered.map(rowHtml).join("") || "<li>None yet.</li>"}</ul>
@@ -120,6 +166,23 @@ app.post("/feedback", async (req, res) => {
   await applyFeedback(user.id, domain, action);
 
   res.redirect("/");
+});
+
+app.post("/speech", async (req, res) => {
+  const { text } = req.body as { text?: string };
+  if (!text || !text.trim()) {
+    res.status(400).json({ error: "text is required" });
+    return;
+  }
+
+  try {
+    const { audio, mimeType } = await voiceService.generateSpeech(text);
+    res.setHeader("Content-Type", mimeType);
+    res.send(audio);
+  } catch (err) {
+    console.error("Speech generation failed:", err);
+    res.status(502).json({ error: "Speech generation failed" });
+  }
 });
 
 const port = Number(process.env.PORT ?? 3000);
