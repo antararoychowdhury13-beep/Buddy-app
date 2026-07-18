@@ -47,12 +47,47 @@ export interface ScoredInsight extends CandidateInsight {
   tier: Tier;
 }
 
-export interface InsightRecord extends ScoredInsight {
+/** Shape of a row as it actually comes back from the `insight` table (snake_case, DB boundary only). */
+export interface InsightRow {
   id: string;
   user_id: string;
+  domain: Domain;
+  source_event_ids: string[];
+  candidate_text: string;
+  confidence: number;
+  tier: Tier;
   composed_text: string | null;
   delivered_at: string | null;
   created_at: string;
+}
+
+/** Application-facing domain object — camelCase everywhere, no DB column names leak past `toInsight`. */
+export interface Insight {
+  id: string;
+  userId: string;
+  domain: Domain;
+  sourceEventIds: string[];
+  candidateText: string;
+  confidence: number;
+  tier: Tier;
+  composedText: string | null;
+  deliveredAt: string | null;
+  createdAt: string;
+}
+
+export function toInsight(row: InsightRow): Insight {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    domain: row.domain,
+    sourceEventIds: row.source_event_ids,
+    candidateText: row.candidate_text,
+    confidence: row.confidence,
+    tier: row.tier,
+    composedText: row.composed_text,
+    deliveredAt: row.delivered_at,
+    createdAt: row.created_at,
+  };
 }
 
 export interface TrustScoreRecord {
