@@ -104,6 +104,8 @@ app.get("/", async (_req, res) => {
       if (!btn) return;
       var audioEl = document.getElementById("briefing-audio");
       var textEl = document.getElementById("briefing-text");
+      var currentObjectUrl = null;
+
       btn.addEventListener("click", function () {
         var text = textEl.innerText;
         btn.disabled = true;
@@ -119,19 +121,30 @@ app.get("/", async (_req, res) => {
             return res.blob();
           })
           .then(function (blob) {
-            var url = URL.createObjectURL(blob);
-            audioEl.src = url;
+            audioEl.pause();
+            if (currentObjectUrl) {
+              URL.revokeObjectURL(currentObjectUrl);
+            }
+            currentObjectUrl = URL.createObjectURL(blob);
+            audioEl.src = currentObjectUrl;
             audioEl.hidden = false;
             return audioEl.play();
           })
           .catch(function (err) {
             console.error(err);
-            alert("Could not generate speech. See console for details.");
+            alert("Could not generate speech. Please try again.");
           })
           .finally(function () {
             btn.disabled = false;
             btn.textContent = originalLabel;
           });
+      });
+
+      audioEl.addEventListener("ended", function () {
+        if (currentObjectUrl) {
+          URL.revokeObjectURL(currentObjectUrl);
+          currentObjectUrl = null;
+        }
       });
     })();
   </script>
@@ -168,10 +181,17 @@ app.post("/feedback", async (req, res) => {
   res.redirect("/");
 });
 
+const MAX_SPEECH_TEXT_LENGTH = 1500;
+
 app.post("/speech", async (req, res) => {
-  const { text } = req.body as { text?: string };
-  if (!text || !text.trim()) {
-    res.status(400).json({ error: "text is required" });
+  const { text } = (req.body ?? {}) as { text?: unknown };
+
+  if (typeof text !== "string" || !text.trim()) {
+    res.status(400).json({ error: "text is required and must be a non-empty string" });
+    return;
+  }
+  if (text.length > MAX_SPEECH_TEXT_LENGTH) {
+    res.status(400).json({ error: `text must be ${MAX_SPEECH_TEXT_LENGTH} characters or fewer` });
     return;
   }
 
@@ -182,6 +202,15 @@ app.post("/speech", async (req, res) => {
   } catch (err) {
     console.error("Speech generation failed:", err);
     res.status(502).json({ error: "Speech generation failed" });
+  }
+});
+
+// Catches malformed JSON bodies and any other unexpected synchronous error so
+// a raw stack trace is never sent to the browser, regardless of NODE_ENV.
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("Unhandled request error:", err);
+  if (!res.headersSent) {
+    res.status(400).json({ error: "Invalid request" });
   }
 });
 
