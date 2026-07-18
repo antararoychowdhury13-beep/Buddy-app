@@ -217,6 +217,6 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
 });
 
 const port = Number(process.env.PORT ?? 3000);
-app.listen(port, () => {
+export const server = app.listen(port, () => {
   console.log(`Buddy briefing running at http://localhost:${port}`);
 });

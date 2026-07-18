@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "ingest": "tsx scripts/ingest.ts",
     "test": "tsx scripts/test-trust-engine.ts",
+    "test:speech": "tsx scripts/test-speech-smoke.ts",
     "typecheck": "tsc -p tsconfig.scripts.json"
   },
   "dependencies": {
