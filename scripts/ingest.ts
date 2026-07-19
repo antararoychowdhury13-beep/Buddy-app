@@ -92,36 +92,56 @@ async function buildCandidates(
   }
 
   if (evening) {
-    candidates.push({
-      domain: "commute",
-      sourceEventIds: [evening.id],
-      candidateText: "Traffic may run heavier than usual on your evening commute because of the forecasted rain.",
-      sourceDirectness: 0.5, // derived from the rain forecast, not observed directly
-      evidenceMaturity: commuteEvidenceMaturity,
-      domainAccuracy: commuteDomainAccuracy,
-      stakesMultiplier: 0.7,
-    });
+    const raw = evening.raw as { condition: string; precipitationProbability: number };
+    const rainy = raw.precipitationProbability >= 0.4;
 
-    candidates.push({
-      domain: "commute",
-      sourceEventIds: [evening.id],
-      candidateText: "Rain is likely during your evening commute — worth leaving 15 minutes early and grabbing an umbrella.",
-      sourceDirectness: 0.9,
-      evidenceMaturity: commuteEvidenceMaturity,
-      domainAccuracy: commuteDomainAccuracy,
-      stakesMultiplier: 0.9,
-    });
+    if (rainy) {
+      candidates.push({
+        domain: "commute",
+        sourceEventIds: [evening.id],
+        candidateText: `Traffic may run heavier than usual on your evening commute because of the forecasted ${raw.condition} (${Math.round(raw.precipitationProbability * 100)}% chance).`,
+        sourceDirectness: 0.5, // derived from the rain forecast, not observed directly
+        evidenceMaturity: commuteEvidenceMaturity,
+        domainAccuracy: commuteDomainAccuracy,
+        stakesMultiplier: 0.7,
+      });
+
+      candidates.push({
+        domain: "commute",
+        sourceEventIds: [evening.id],
+        candidateText: `${raw.condition[0].toUpperCase()}${raw.condition.slice(1)} is likely during your evening commute (${Math.round(raw.precipitationProbability * 100)}% chance) — worth leaving 15 minutes early and grabbing an umbrella.`,
+        sourceDirectness: 0.9,
+        evidenceMaturity: commuteEvidenceMaturity,
+        domainAccuracy: commuteDomainAccuracy,
+        stakesMultiplier: 0.9,
+      });
+    } else {
+      candidates.push({
+        domain: "commute",
+        sourceEventIds: [evening.id],
+        candidateText: `Evening commute looks dry (${raw.condition}) — no umbrella needed.`,
+        sourceDirectness: 1.0,
+        evidenceMaturity: commuteEvidenceMaturity,
+        domainAccuracy: commuteDomainAccuracy,
+        stakesMultiplier: 1.0, // trivial to be wrong about, no real downside
+      });
+    }
   }
 
   if (morning) {
+    const raw = morning.raw as { condition: string; precipitationProbability: number };
+    const rainy = raw.precipitationProbability >= 0.4;
+
     candidates.push({
       domain: "commute",
       sourceEventIds: [morning.id],
-      candidateText: "Clear skies for your morning commute — no umbrella needed.",
+      candidateText: rainy
+        ? `${raw.condition[0].toUpperCase()}${raw.condition.slice(1)} expected for your morning commute (${Math.round(raw.precipitationProbability * 100)}% chance) — worth an umbrella.`
+        : `Clear skies for your morning commute (${raw.condition}) — no umbrella needed.`,
       sourceDirectness: 1.0,
       evidenceMaturity: commuteEvidenceMaturity,
       domainAccuracy: commuteDomainAccuracy,
-      stakesMultiplier: 1.0, // trivial to be wrong about, no real downside
+      stakesMultiplier: rainy ? 0.9 : 1.0,
     });
   }
 
