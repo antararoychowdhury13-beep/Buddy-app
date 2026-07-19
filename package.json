@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "ingest": "tsx scripts/ingest.ts",
+    "auth:google": "tsx scripts/auth-google.ts",
     "test": "tsx scripts/test-trust-engine.ts",
     "test:speech": "tsx scripts/test-speech-smoke.ts",
     "typecheck": "tsc -p tsconfig.scripts.json"
@@ -17,6 +18,7 @@
     "@supabase/supabase-js": "^2.45.4",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
+    "googleapis": "^173.0.0",
     "kokoro-js": "^1.2.1"
   },
   "devDependencies": {

@@ -1,9 +1,11 @@
+import { google } from "googleapis";
 import type { EventRecord } from "../types.js";
 
 /**
- * Mock Google Calendar connector. Shaped like what the real Google Calendar API
- * (events.list) would return, so swapping in the real client later only touches
- * this file, not the ingest pipeline or trust engine.
+ * Google Calendar connector (read-only, single user). Requires GOOGLE_CLIENT_ID,
+ * GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN in .env — run
+ * `npm run auth:google` once to obtain the refresh token via the one-time
+ * OAuth consent flow.
  */
 export interface RawCalendarEvent {
   id: string;
@@ -12,19 +14,47 @@ export interface RawCalendarEvent {
   end: string; // ISO datetime
 }
 
-export async function fetchCalendarEvents(): Promise<RawCalendarEvent[]> {
-  const today = new Date();
-  const at = (hour: number, minute = 0) => {
-    const d = new Date(today);
-    d.setHours(hour, minute, 0, 0);
-    return d.toISOString();
-  };
+function getOAuthClient() {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
 
-  return [
-    { id: "cal_1", summary: "Design review", start: at(14, 0), end: at(15, 0) },
-    { id: "cal_2", summary: "1:1 with manager", start: at(15, 0), end: at(15, 30) },
-    { id: "cal_3", summary: "Sprint planning", start: at(9, 0), end: at(10, 0) },
-  ];
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error(
+      "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN must be set in .env. Run `npm run auth:google` after creating an OAuth client in Google Cloud Console."
+    );
+  }
+
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  return oauth2Client;
+}
+
+export async function fetchCalendarEvents(): Promise<RawCalendarEvent[]> {
+  const auth = getOAuthClient();
+  const calendar = google.calendar({ version: "v3", auth });
+
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date();
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const res = await calendar.events.list({
+    calendarId: "primary",
+    timeMin: startOfDay.toISOString(),
+    timeMax: endOfDay.toISOString(),
+    singleEvents: true,
+    orderBy: "startTime",
+  });
+
+  return (res.data.items ?? [])
+    .filter((event) => event.id && (event.start?.dateTime || event.start?.date))
+    .map((event) => ({
+      id: event.id as string,
+      summary: event.summary ?? "(no title)",
+      start: (event.start?.dateTime ?? event.start?.date) as string,
+      end: (event.end?.dateTime ?? event.end?.date) as string,
+    }));
 }
 
 export function normalizeCalendarEvents(

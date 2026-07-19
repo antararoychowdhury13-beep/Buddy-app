@@ -11,6 +11,24 @@ import { getTrustScore, seedTrustScore } from "../src/trustScoreStore.js";
 import { composeBriefing } from "../src/reasoning.js";
 import type { CandidateInsight, Domain, EventRecord } from "../src/types.js";
 
+/** Finds the first pair of calendar events with 5 minutes or less between them. */
+function findBackToBackMeetings(calendarEvents: EventRecord[]): [EventRecord, EventRecord] | null {
+  const sorted = [...calendarEvents].sort(
+    (a, b) => new Date((a.raw as { start: string }).start).getTime() - new Date((b.raw as { start: string }).start).getTime()
+  );
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i];
+    const b = sorted[i + 1];
+    const aEnd = new Date((a.raw as { end: string }).end).getTime();
+    const bStart = new Date((b.raw as { start: string }).start).getTime();
+    const gapMinutes = (bStart - aEnd) / 60000;
+    if (gapMinutes >= 0 && gapMinutes <= 5) {
+      return [a, b];
+    }
+  }
+  return null;
+}
+
 async function upsertConnector(userId: string, type: "google_calendar" | "weather") {
   const { data, error } = await db
     .from("connector")
@@ -61,19 +79,22 @@ async function buildCandidates(
   const commuteDomainAccuracy = domainAccuracyFromTrustScore(commuteTs);
   const commuteEvidenceMaturity = evidenceMaturityFromTrustScore(commuteTs);
 
-  const designReview = calendarEvents.find((e) => (e.raw as any).id === "cal_1");
-  const oneOnOne = calendarEvents.find((e) => (e.raw as any).id === "cal_2");
   const evening = weatherEvents.find((e) => (e.raw as any).window === "evening");
   const morning = weatherEvents.find((e) => (e.raw as any).window === "morning");
 
   const candidates: CandidateInsight[] = [];
 
-  if (designReview && oneOnOne) {
+  const backToBack = findBackToBackMeetings(calendarEvents);
+  if (backToBack) {
+    const [a, b] = backToBack;
+    const aRaw = a.raw as { summary: string; end: string };
+    const bRaw = b.raw as { summary: string };
+    const endTime = new Date(aRaw.end).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
     candidates.push({
       domain: "work",
-      sourceEventIds: [designReview.id, oneOnOne.id],
-      candidateText:
-        "Your design review ends at 3:00pm right as your 1:1 with your manager starts, with no buffer between them.",
+      sourceEventIds: [a.id, b.id],
+      candidateText: `Your ${aRaw.summary} ends at ${endTime} right as your ${bRaw.summary} starts, with no buffer between them.`,
       sourceDirectness: 1.0, // directly read off the calendar, no inference
       evidenceMaturity: workEvidenceMaturity,
       domainAccuracy: workDomainAccuracy,
@@ -82,8 +103,8 @@ async function buildCandidates(
 
     candidates.push({
       domain: "work",
-      sourceEventIds: [designReview.id, oneOnOne.id],
-      candidateText: "Your afternoon looks like it might be running you a little ragged this week.",
+      sourceEventIds: [a.id, b.id],
+      candidateText: "Your day looks like it might be running you a little ragged, with back-to-back meetings and no breathing room.",
       sourceDirectness: 0.3, // inferred pattern, not a direct fact
       evidenceMaturity: workEvidenceMaturity,
       domainAccuracy: workDomainAccuracy,
