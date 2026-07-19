@@ -306,11 +306,21 @@ const CONNECT_ERROR_MESSAGE: Record<string, string> = {
   missing_code: "Google didn't return an authorization code. Please try again.",
 };
 
+const FACT_CATEGORY_LABEL: Record<string, string> = {
+  home: "Home",
+  office: "Office",
+  family: "Family",
+  contact: "Contact",
+  festival: "Festival",
+  other: "Other",
+};
+
 app.get("/me", async (req, res) => {
   const user = await getOrCreateSingleUser(requireEmail());
-  const [{ data: trustScores }, { data: connectorRows }] = await Promise.all([
+  const [{ data: trustScores }, { data: connectorRows }, facts] = await Promise.all([
     db.from("trust_score").select("*").eq("user_id", user.id).order("domain"),
     db.from("connector").select("*").eq("user_id", user.id),
+    getFacts(user.id),
   ]);
 
   const headerHtml = `
@@ -387,6 +397,41 @@ app.get("/me", async (req, res) => {
       ).join("")}
     </div>
 
+    <div class="section-head"><h2>Personal info Buddy remembers</h2></div>
+    <div class="card">
+      ${
+        facts.length > 0
+          ? facts
+              .map(
+                (f) => `
+        <div class="list-row">
+          <span style="font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--violet); background:var(--violet-dim); padding:3px 7px; border-radius:6px; flex-shrink:0;">${escapeHtml(FACT_CATEGORY_LABEL[f.category] ?? f.category)}</span>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:12.5px; font-weight:600;">${escapeHtml(f.key)}</div>
+            <div style="font-size:11.5px; color:var(--mist); overflow-wrap:anywhere;">${escapeHtml(f.value)}</div>
+          </div>
+          <form method="post" action="/facts/${f.id}/delete">
+            <button class="btn btn-ghost btn-sm" type="submit" aria-label="Delete">${icon("x", "i i-sm")}</button>
+          </form>
+        </div>`
+              )
+              .join("")
+          : `<div style="color:var(--faint); font-size:12.5px; margin-bottom:10px;">Nothing saved yet — ask Buddy to remember something (in Chats or Voice), or add it directly below.</div>`
+      }
+      <form method="post" action="/facts" style="display:flex; flex-direction:column; gap:8px; margin-top:${facts.length > 0 ? "14px" : "0"}; padding-top:${facts.length > 0 ? "14px" : "0"}; border-top:${facts.length > 0 ? "1px solid var(--line)" : "none"};">
+        <div style="display:flex; gap:8px;">
+          <select name="category" style="background:var(--layer-02); border:1px solid var(--line); border-radius:var(--r-md); padding:9px 10px; color:var(--text); font-family:inherit; font-size:12.5px; flex-shrink:0;">
+            ${Object.entries(FACT_CATEGORY_LABEL).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
+          </select>
+          <input type="text" name="key" placeholder="e.g. wife's phone number" required
+            style="flex:1; min-width:0; background:var(--layer-02); border:1px solid var(--line); border-radius:var(--r-md); padding:9px 10px; color:var(--text); font-family:inherit; font-size:12.5px;" />
+        </div>
+        <input type="text" name="value" placeholder="Value" required
+          style="background:var(--layer-02); border:1px solid var(--line); border-radius:var(--r-md); padding:9px 10px; color:var(--text); font-family:inherit; font-size:12.5px;" />
+        <button class="btn btn-primary btn-sm" type="submit" style="align-self:flex-start;">Save</button>
+      </form>
+    </div>
+
     <div class="section-head"><h2>How Buddy is learning</h2></div>
     <div class="card">${trustHtml || `<div style="color:var(--faint); font-size:12.5px;">No trust history yet.</div>`}</div>
 
@@ -396,6 +441,28 @@ app.get("/me", async (req, res) => {
   `;
 
   res.send(renderShell({ title: "Me", activeTab: "me", headerHtml, bodyHtml }));
+});
+
+const FACT_CATEGORIES = ["home", "office", "family", "contact", "festival", "other"] as const;
+
+app.post("/facts", async (req, res) => {
+  const { category, key, value } = req.body as { category?: string; key?: string; value?: string };
+
+  if (!key?.trim() || !value?.trim()) {
+    res.status(400).send("key and value are required");
+    return;
+  }
+  const safeCategory = (FACT_CATEGORIES as readonly string[]).includes(category ?? "") ? (category as (typeof FACT_CATEGORIES)[number]) : "other";
+
+  const user = await getOrCreateSingleUser(requireEmail());
+  await upsertFact(user.id, { category: safeCategory, key: key.trim(), value: value.trim() });
+  res.redirect("/me");
+});
+
+app.post("/facts/:id/delete", async (req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
+  await deleteFact(user.id, req.params.id);
+  res.redirect("/me");
 });
 
 // ---------------------------------------------------------------- My Day
