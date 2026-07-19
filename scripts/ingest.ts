@@ -29,7 +29,10 @@ function findBackToBackMeetings(calendarEvents: EventRecord[]): [EventRecord, Ev
   return null;
 }
 
-async function getOrCreateConnector(userId: string, type: "google_calendar" | "weather") {
+async function getOrCreateConnector(
+  userId: string,
+  type: "google_calendar" | "weather"
+): Promise<{ row: Awaited<ReturnType<typeof insertConnectorRow>>; wasJustCreated: boolean }> {
   const { data: existing, error } = await db
     .from("connector")
     .select("*")
@@ -37,8 +40,12 @@ async function getOrCreateConnector(userId: string, type: "google_calendar" | "w
     .eq("type", type)
     .maybeSingle();
   if (error) throw error;
-  if (existing) return existing;
+  if (existing) return { row: existing, wasJustCreated: false };
 
+  return { row: await insertConnectorRow(userId, type), wasJustCreated: true };
+}
+
+async function insertConnectorRow(userId: string, type: "google_calendar" | "weather") {
   const { data: created, error: createErr } = await db
     .from("connector")
     .insert({ user_id: userId, type, status: "disconnected" })
@@ -49,18 +56,19 @@ async function getOrCreateConnector(userId: string, type: "google_calendar" | "w
 }
 
 /**
- * Credentials now live on the connector row (managed via the in-app Connect
- * flow on the Me page), not static .env values. This migrates an existing
- * .env-based setup into the database once, so it keeps working after the
- * upgrade without requiring a re-connect.
+ * Credentials live on the connector row (managed via the in-app Connect flow
+ * on the Me page), not static .env values. The .env fallback only applies
+ * the very first time this connector's row is created — never once a row
+ * already exists, so an explicit Disconnect in the UI (which clears the row
+ * but doesn't delete it) is respected instead of silently re-migrated back.
  */
 async function getGoogleRefreshToken(userId: string): Promise<{ connectorId: string; refreshToken: string }> {
-  const connector = await getOrCreateConnector(userId, "google_calendar");
+  const { row: connector, wasJustCreated } = await getOrCreateConnector(userId, "google_calendar");
   if (connector.refresh_token) {
     return { connectorId: connector.id, refreshToken: connector.refresh_token };
   }
 
-  const envToken = process.env.GOOGLE_REFRESH_TOKEN;
+  const envToken = wasJustCreated ? process.env.GOOGLE_REFRESH_TOKEN : undefined;
   if (envToken) {
     const { data, error } = await db
       .from("connector")
@@ -74,20 +82,20 @@ async function getGoogleRefreshToken(userId: string): Promise<{ connectorId: str
   }
 
   throw new Error(
-    "Google Calendar isn't connected yet. Connect it from the Me page in the app (or run `npm run auth:google`)."
+    "Google Calendar isn't connected. Connect it from the Me page in the app (or run `npm run auth:google`)."
   );
 }
 
 async function getWeatherCredentials(
   userId: string
 ): Promise<{ connectorId: string; apiKey: string; location: string }> {
-  const connector = await getOrCreateConnector(userId, "weather");
+  const { row: connector, wasJustCreated } = await getOrCreateConnector(userId, "weather");
   const metadata = (connector.metadata ?? {}) as { apiKey?: string; location?: string };
   if (metadata.apiKey) {
     return { connectorId: connector.id, apiKey: metadata.apiKey, location: metadata.location ?? "Bengaluru,IN" };
   }
 
-  const envKey = process.env.OPENWEATHER_API_KEY;
+  const envKey = wasJustCreated ? process.env.OPENWEATHER_API_KEY : undefined;
   if (envKey) {
     const migrated = { apiKey: envKey, location: process.env.WEATHER_LOCATION ?? "Bengaluru,IN" };
     const { data, error } = await db
@@ -101,7 +109,7 @@ async function getWeatherCredentials(
     return { connectorId: data.id, apiKey: migrated.apiKey, location: migrated.location };
   }
 
-  throw new Error("Weather isn't connected yet. Connect it from the Me page in the app.");
+  throw new Error("Weather isn't connected. Connect it from the Me page in the app.");
 }
 
 async function insertEvents(rows: Omit<EventRecord, "id">[]): Promise<EventRecord[]> {

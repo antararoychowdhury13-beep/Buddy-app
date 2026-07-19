@@ -7,6 +7,7 @@ import { toInsight } from "./types.js";
 import { voiceService } from "./voice/index.js";
 import { escapeHtml, icon } from "./webapp/design.js";
 import { renderShell } from "./webapp/shell.js";
+import { connectRouter, startGoogleOAuthCallbackServer } from "./webapp/connect.js";
 import {
   DOMAIN_META,
   formatClockTime,
@@ -18,6 +19,7 @@ import {
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+app.use(connectRouter);
 
 function requireEmail(): string {
   const email = process.env.BUDDY_USER_EMAIL;
@@ -242,9 +244,24 @@ app.get("/insight/:id", async (req, res) => {
 
 // ---------------------------------------------------------------- Me
 
-app.get("/me", async (_req, res) => {
+const CONNECTOR_META: Record<
+  "google_calendar" | "weather",
+  { label: string; icon: string; chip: string; connectHref: string; disconnectAction: string }
+> = {
+  google_calendar: { label: "Calendar", icon: "calendar", chip: "iris", connectHref: "/connect/google", disconnectAction: "/connect/google/disconnect" },
+  weather: { label: "Weather", icon: "cloud", chip: "warn", connectHref: "/connect/weather", disconnectAction: "/connect/weather/disconnect" },
+};
+
+const CONNECT_BANNER_LABEL: Record<string, string> = { google_calendar: "Calendar", weather: "Weather" };
+const CONNECT_ERROR_MESSAGE: Record<string, string> = {
+  no_refresh_token: "Google didn't return a refresh token. If you've connected before, revoke access at myaccount.google.com/permissions and try again.",
+  exchange_failed: "Couldn't complete the Google sign-in. Please try again.",
+  missing_code: "Google didn't return an authorization code. Please try again.",
+};
+
+app.get("/me", async (req, res) => {
   const user = await getOrCreateSingleUser(requireEmail());
-  const [{ data: trustScores }, { data: connectors }] = await Promise.all([
+  const [{ data: trustScores }, { data: connectorRows }] = await Promise.all([
     db.from("trust_score").select("*").eq("user_id", user.id).order("domain"),
     db.from("connector").select("*").eq("user_id", user.id),
   ]);
@@ -269,18 +286,39 @@ app.get("/me", async (_req, res) => {
     })
     .join("");
 
-  const connectorLabel: Record<string, string> = { google_calendar: "Calendar", weather: "Weather" };
-  const connectorIcon: Record<string, string> = { google_calendar: "calendar", weather: "cloud" };
-  const connectorHtml = (connectors ?? [])
-    .map(
-      (c) => `
+  const connectorsByType = new Map((connectorRows ?? []).map((c) => [c.type as "google_calendar" | "weather", c]));
+
+  const connectorHtml = (Object.keys(CONNECTOR_META) as ("google_calendar" | "weather")[])
+    .map((type) => {
+      const meta = CONNECTOR_META[type];
+      const row = connectorsByType.get(type);
+      const isConnected = row?.status === "connected";
+      return `
       <div class="list-row">
-        <div class="chip ${c.type === "google_calendar" ? "iris" : "warn"}" style="width:32px; height:32px; border-radius:9px;">${icon(connectorIcon[c.type] ?? "grid", "i i-sm")}</div>
-        <div style="flex:1; font-size:12.5px; font-weight:600;">${connectorLabel[c.type] ?? c.type}</div>
-        <span style="font-size:10px; font-weight:600; color:${c.status === "connected" ? "var(--good)" : "var(--faint)"};">${c.status}</span>
-      </div>`
-    )
+        <div class="chip ${meta.chip}" style="width:32px; height:32px; border-radius:9px;">${icon(meta.icon, "i i-sm")}</div>
+        <div style="flex:1; font-size:12.5px; font-weight:600;">${meta.label}</div>
+        ${
+          isConnected
+            ? `<span style="font-size:10px; font-weight:600; color:var(--good); margin-right:8px;">Connected</span>
+               <form method="post" action="${meta.disconnectAction}"><button class="btn btn-ghost btn-sm" type="submit">Disconnect</button></form>`
+            : `<a href="${meta.connectHref}" class="btn btn-primary btn-sm">Connect</a>`
+        }
+      </div>`;
+    })
     .join("");
+
+  const connected = typeof req.query.connected === "string" ? req.query.connected : null;
+  const disconnected = typeof req.query.disconnected === "string" ? req.query.disconnected : null;
+  const connectError = typeof req.query.connect_error === "string" ? req.query.connect_error : null;
+
+  let bannerHtml = "";
+  if (connected) {
+    bannerHtml = `<div class="card" style="margin-top:12px; border-color:var(--good); color:var(--good); font-size:13px;">${CONNECT_BANNER_LABEL[connected] ?? connected} connected.</div>`;
+  } else if (disconnected) {
+    bannerHtml = `<div class="card" style="margin-top:12px; font-size:13px; color:var(--mist);">${CONNECT_BANNER_LABEL[disconnected] ?? disconnected} disconnected.</div>`;
+  } else if (connectError) {
+    bannerHtml = `<div class="card" style="margin-top:12px; border-color:var(--crit); color:var(--crit); font-size:13px;">${escapeHtml(CONNECT_ERROR_MESSAGE[connectError] ?? "Something went wrong connecting that.")}</div>`;
+  }
 
   const bodyHtml = `
     <div style="display:flex; align-items:center; gap:12px; margin-top:6px;">
@@ -288,8 +326,10 @@ app.get("/me", async (_req, res) => {
       <div><div style="font-size:15.5px; font-weight:700;">${escapeHtml(user.display_name ?? user.email.split("@")[0])}</div><div style="font-size:11px; color:var(--faint);">${escapeHtml(user.email)}</div></div>
     </div>
 
+    ${bannerHtml}
+
     <div class="section-head"><h2>Connected accounts</h2></div>
-    ${connectorHtml || `<div style="color:var(--faint); font-size:12.5px;">No connectors set up yet — run <code>npm run ingest</code>.</div>`}
+    ${connectorHtml}
 
     <div class="section-head"><h2>How Buddy is learning</h2></div>
     <div class="card">${trustHtml || `<div style="color:var(--faint); font-size:12.5px;">No trust history yet.</div>`}</div>
@@ -621,3 +661,5 @@ const port = Number(process.env.PORT ?? 3000);
 export const server = app.listen(port, () => {
   console.log(`Buddy briefing running at http://localhost:${port}`);
 });
+
+startGoogleOAuthCallbackServer(`http://localhost:${port}`);
