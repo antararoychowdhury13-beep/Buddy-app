@@ -2,30 +2,422 @@ import "dotenv/config";
 import express from "express";
 import { db, getOrCreateSingleUser } from "./db.js";
 import { applyFeedback } from "./trustScoreStore.js";
-import type { Domain, Insight, InsightRow } from "./types.js";
+import type { Domain, Insight, InsightRow, Tier } from "./types.js";
 import { toInsight } from "./types.js";
 import { voiceService } from "./voice/index.js";
+import { escapeHtml, icon } from "./webapp/design.js";
+import { renderShell } from "./webapp/shell.js";
+import {
+  DOMAIN_META,
+  endOfToday,
+  formatClockTime,
+  relativeTime,
+  safeInternalPath,
+  startOfToday,
+  tierPillHtml,
+} from "./webapp/helpers.js";
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function requireEmail(): string {
+  const email = process.env.BUDDY_USER_EMAIL;
+  if (!email) throw new Error("BUDDY_USER_EMAIL not set in .env");
+  return email;
 }
 
+function nudgeCardHtml(i: Insight, opts: { showDetailsLink?: boolean } = {}): string {
+  const meta = DOMAIN_META[i.domain];
+  return `
+    <div class="nudge-card">
+      <div class="chip ${meta.chip}">${icon(meta.icon)}</div>
+      <div class="nudge-body">
+        <div class="nudge-top">
+          <span class="nudge-domain ${i.domain}">${meta.label}</span>
+          <span class="nudge-time mono">${relativeTime(i.createdAt)}</span>
+        </div>
+        <div class="nudge-msg">${escapeHtml(i.candidateText)}</div>
+        <div class="nudge-foot">
+          ${tierPillHtml(i.tier)}
+          <div style="display:flex; gap:6px; align-items:center;">
+            <button class="btn btn-ghost btn-sm listen-btn" type="button" data-text="${escapeHtml(i.candidateText)}">${icon("wave", "i i-sm")}</button>
+            ${opts.showDetailsLink ? `<a href="/insight/${i.id}" class="btn btn-ghost btn-sm">Details</a>` : ""}
+          </div>
+        </div>
+        <form method="post" action="/feedback" style="display:flex; gap:6px; margin-top:8px;">
+          <input type="hidden" name="insightId" value="${i.id}" />
+          <input type="hidden" name="domain" value="${i.domain}" />
+          <input type="hidden" name="returnTo" value="/" />
+          <button class="btn btn-outline-good btn-sm" name="action" value="confirmed">${icon("check", "i i-sm")}Confirm</button>
+          <button class="btn btn-ghost btn-sm" name="action" value="dismissed">Dismiss</button>
+        </form>
+      </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------- Home
+
 app.get("/", async (_req, res) => {
-  const email = process.env.BUDDY_USER_EMAIL;
-  if (!email) {
-    res.status(500).send("BUDDY_USER_EMAIL not set in .env");
+  const user = await getOrCreateSingleUser(requireEmail());
+
+  const [{ data: briefing }, { data: insightRows }, { data: trustScores }, { data: connectors }, { data: calendarEventsToday }] =
+    await Promise.all([
+      db.from("briefing").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      db.from("insight").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20),
+      db.from("trust_score").select("*").eq("user_id", user.id),
+      db.from("connector").select("*").eq("user_id", user.id),
+      db
+        .from("event")
+        .select("raw")
+        .eq("user_id", user.id)
+        .eq("type", "calendar_event")
+        .gte("occurred_at", startOfToday().toISOString())
+        .lte("occurred_at", endOfToday().toISOString()),
+    ]);
+
+  // Ingest can run repeatedly, inserting the same 3 mock meetings again each
+  // time; dedupe by the connector's stable event id for an honest count.
+  const meetingsToday = new Set(
+    (calendarEventsToday ?? []).map((row) => (row.raw as Record<string, unknown>).id as string)
+  ).size;
+
+  // All rows from one ingest run share the same created_at timestamp (one
+  // INSERT statement); keep only the latest run so repeated test runs don't
+  // pile up near-duplicate cards.
+  const allInsights = ((insightRows ?? []) as InsightRow[]).map(toInsight);
+  const latestBatchAt = allInsights[0]?.createdAt;
+  const insights = latestBatchAt ? allInsights.filter((i) => i.createdAt === latestBatchAt) : allInsights;
+  const delivered = insights.filter((i) => i.tier !== "silent");
+  const silent = insights.filter((i) => i.tier === "silent");
+  const avgConfidence =
+    delivered.length > 0 ? delivered.reduce((sum, i) => sum + i.confidence, 0) / delivered.length : null;
+
+  const emailPrefix = user.email.split("@")[0];
+  const displayName = user.display_name ?? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
+
+  const headerHtml = `
+    <button class="icon-btn" id="menu-toggle" aria-label="Open menu">${icon("menu")}</button>
+    <div class="spacer">
+      <div style="font-size:14px; color:var(--mist);">Good day,</div>
+      <div style="font-size:20px; font-weight:700;">${escapeHtml(displayName)}</div>
+      <div style="font-size:11.5px; color:var(--faint);">I've connected your world.</div>
+    </div>
+    <a href="/notifications" class="icon-btn" aria-label="Notifications">${icon("bell")}</a>`;
+
+  const bodyHtml = `
+    <a href="/chats" style="display:flex; align-items:center; gap:10px; background:var(--layer-01); border:1px solid var(--line); border-radius:var(--r-pill); padding:11px 14px; margin-top:6px; color:var(--faint);">
+      ${icon("search", "i i-sm")}<span style="font-size:13px; flex:1;">Ask Buddy anything…</span>
+    </a>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <a href="/voice" class="btn btn-primary" style="flex:1; justify-content:center;">${icon("wave", "i i-sm")}Talk to Buddy</a>
+      <a href="/how-it-works" class="btn btn-ghost">${icon("play", "i i-sm")}How it works</a>
+    </div>
+
+    ${
+      briefing
+        ? `<div class="card" style="margin-top:20px;">
+            <div style="font-size:13px; line-height:1.6;" id="briefing-text">${escapeHtml(briefing.composed_text).replace(/\n/g, "<br/>")}</div>
+            <button class="btn btn-ghost btn-sm listen-btn" type="button" data-text="${escapeHtml(briefing.composed_text)}" style="margin-top:10px;">${icon("wave", "i i-sm")}Listen</button>
+          </div>`
+        : `<div class="card" style="margin-top:20px; color:var(--faint); font-size:13px;">No briefing yet — run <code>npm run ingest</code>.</div>`
+    }
+
+    <div class="section-head"><h2>Today at a glance</h2></div>
+    <div class="tile-grid">
+      <div class="tile">
+        <div class="chip iris">${icon("calendar", "i i-sm")}</div>
+        <div class="num mono">${meetingsToday}</div>
+        <div class="lbl">Meetings today</div>
+      </div>
+      <div class="tile">
+        <div class="chip good">${icon("check", "i i-sm")}</div>
+        <div class="num mono" style="color:var(--good)">${delivered.length}</div>
+        <div class="lbl">Delivered</div>
+      </div>
+      <div class="tile">
+        <div class="chip violet">${icon("grid", "i i-sm")}</div>
+        <div class="num mono">${silent.length}</div>
+        <div class="lbl">Stayed silent</div>
+        <div class="sub" style="color:var(--faint)">correctly held back</div>
+      </div>
+      <div class="tile">
+        <div class="chip warn">${icon("sliders", "i i-sm")}</div>
+        <div class="num mono">${avgConfidence !== null ? avgConfidence.toFixed(2) : "—"}</div>
+        <div class="lbl">Avg. confidence</div>
+      </div>
+    </div>
+
+    <div class="section-head"><h2>Top nudges for you</h2>${delivered.length > 5 ? `<a href="/notifications">View all</a>` : ""}</div>
+    ${delivered.length > 0 ? delivered.slice(0, 5).map((i) => nudgeCardHtml(i, { showDetailsLink: true })).join("") : `<div style="color:var(--faint); font-size:13px;">Nothing cleared the bar yet.</div>`}
+
+    ${
+      silent.length > 0
+        ? `<div class="section-head"><h2>Stayed quiet (${silent.length})</h2></div>
+           ${silent.slice(0, 3).map((i) => nudgeCardHtml(i)).join("")}`
+        : ""
+    }
+
+    <div class="card" style="margin-top:20px;">
+      <div style="font-size:13px; font-weight:600;">I've connected your world</div>
+      <div style="font-size:11px; color:var(--faint); margin-bottom:10px;">Everything in sync and in context.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${(connectors ?? [])
+          .map(
+            (c) =>
+              `<div class="chip ${c.type === "google_calendar" ? "iris" : "warn"}" style="width:32px; height:32px; border-radius:10px;" title="${c.type} — ${c.status}">${icon(c.type === "google_calendar" ? "calendar" : "cloud", "i i-sm")}</div>`
+          )
+          .join("")}
+        <a href="/me" class="chip" style="width:32px; height:32px; border-radius:10px; border:1px solid var(--line); color:var(--faint);">${icon("grid", "i i-sm")}</a>
+      </div>
+    </div>
+  `;
+
+  res.send(renderShell({ title: "Home", activeTab: "home", headerHtml, bodyHtml }));
+});
+
+// ---------------------------------------------------------------- Insight detail
+
+app.get("/insight/:id", async (req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
+  const { data: row } = await db
+    .from("insight")
+    .select("*")
+    .eq("id", req.params.id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!row) {
+    res.status(404).send(
+      renderShell({
+        title: "Not found",
+        showTabbar: false,
+        headerHtml: `<a href="/" class="icon-btn">${icon("chevron-l")}</a><div class="spacer"><h1>Not found</h1></div>`,
+        bodyHtml: `<div class="card" style="margin-top:16px;">That insight doesn't exist (or isn't yours).</div>`,
+      })
+    );
     return;
   }
-  const user = await getOrCreateSingleUser(email);
 
+  const i = toInsight(row as InsightRow);
+  const meta = DOMAIN_META[i.domain];
+
+  const headerHtml = `
+    <a href="/" class="icon-btn" aria-label="Back">${icon("chevron-l")}</a>
+    <div class="spacer" style="text-align:center;"><span class="nudge-domain ${i.domain}">${meta.label}</span></div>
+    ${tierPillHtml(i.tier)}`;
+
+  const bodyHtml = `
+    <div style="text-align:center; margin:18px 0 8px;">
+      <div class="mono" style="font-size:36px; font-weight:700; color:var(--violet);">${i.confidence.toFixed(2)}</div>
+      <div style="font-size:11px; color:var(--faint); text-transform:uppercase; letter-spacing:0.08em;">confidence</div>
+    </div>
+
+    <div class="card" style="font-size:14.5px; line-height:1.6;">${escapeHtml(i.candidateText)}</div>
+
+    <div class="card" style="margin-top:10px; display:flex; align-items:center; justify-content:space-between;">
+      <span style="font-size:12px; color:var(--faint);">Hear this nudge read aloud</span>
+      <button class="btn btn-primary btn-sm listen-btn" type="button" data-text="${escapeHtml(i.candidateText)}">${icon("wave", "i i-sm")}Listen</button>
+    </div>
+
+    <form method="post" action="/feedback" style="display:flex; gap:8px; margin-top:18px;">
+      <input type="hidden" name="insightId" value="${i.id}" />
+      <input type="hidden" name="domain" value="${i.domain}" />
+      <input type="hidden" name="returnTo" value="/" />
+      <button class="btn btn-outline-good" style="flex:1; justify-content:center;" name="action" value="confirmed">${icon("check", "i i-sm")}Confirm</button>
+      <button class="btn btn-ghost" style="flex:1; justify-content:center;" name="action" value="dismissed">Dismiss</button>
+    </form>
+  `;
+
+  res.send(renderShell({ title: meta.label, showTabbar: false, headerHtml, bodyHtml }));
+});
+
+// ---------------------------------------------------------------- Me
+
+app.get("/me", async (_req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
+  const [{ data: trustScores }, { data: connectors }] = await Promise.all([
+    db.from("trust_score").select("*").eq("user_id", user.id).order("domain"),
+    db.from("connector").select("*").eq("user_id", user.id),
+  ]);
+
+  const headerHtml = `
+    <button class="icon-btn" id="menu-toggle" aria-label="Open menu">${icon("menu")}</button>
+    <div class="spacer"><h1>Me</h1></div>`;
+
+  const initials = user.email.slice(0, 2).toUpperCase();
+
+  const trustHtml = (trustScores ?? [])
+    .map((t) => {
+      const meta = DOMAIN_META[t.domain as Domain];
+      const pct = Math.round(Number(t.accuracy) * 100);
+      const barColor = `var(--${meta.chip === "iris" ? "iris" : meta.chip === "violet" ? "violet" : meta.chip === "good" ? "good" : meta.chip === "warn" ? "warn" : "rose"})`;
+      return `
+      <div class="trust-row">
+        <div class="top"><span style="font-weight:600;">${meta.label}</span><span class="mono">${pct}%</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${barColor};"></div></div>
+        <div class="caption">${t.confirmed_count} confirmed · ${t.dismissed_count} dismissed · evidence ${t.evidence_count}</div>
+      </div>`;
+    })
+    .join("");
+
+  const connectorLabel: Record<string, string> = { google_calendar: "Calendar", weather: "Weather" };
+  const connectorIcon: Record<string, string> = { google_calendar: "calendar", weather: "cloud" };
+  const connectorHtml = (connectors ?? [])
+    .map(
+      (c) => `
+      <div class="list-row">
+        <div class="chip ${c.type === "google_calendar" ? "iris" : "warn"}" style="width:32px; height:32px; border-radius:9px;">${icon(connectorIcon[c.type] ?? "grid", "i i-sm")}</div>
+        <div style="flex:1; font-size:12.5px; font-weight:600;">${connectorLabel[c.type] ?? c.type}</div>
+        <span style="font-size:10px; font-weight:600; color:${c.status === "connected" ? "var(--good)" : "var(--faint)"};">${c.status}</span>
+      </div>`
+    )
+    .join("");
+
+  const bodyHtml = `
+    <div style="display:flex; align-items:center; gap:12px; margin-top:6px;">
+      <div style="width:52px; height:52px; border-radius:50%; background:var(--grad-brand); display:flex; align-items:center; justify-content:center; font-weight:700; color:#0A0B14; font-size:16px;">${initials}</div>
+      <div><div style="font-size:15.5px; font-weight:700;">${escapeHtml(user.display_name ?? user.email.split("@")[0])}</div><div style="font-size:11px; color:var(--faint);">${escapeHtml(user.email)}</div></div>
+    </div>
+
+    <div class="section-head"><h2>Connected accounts</h2></div>
+    ${connectorHtml || `<div style="color:var(--faint); font-size:12.5px;">No connectors set up yet — run <code>npm run ingest</code>.</div>`}
+
+    <div class="section-head"><h2>How Buddy is learning</h2></div>
+    <div class="card">${trustHtml || `<div style="color:var(--faint); font-size:12.5px;">No trust history yet.</div>`}</div>
+
+    <div class="section-head"><h2>Preferences</h2></div>
+    <div class="list-row"><span style="flex:1; font-weight:600; font-size:12.5px;">Voice</span><span style="color:var(--mist); font-size:12px;">af_heart · English</span></div>
+    <div class="list-row"><span style="flex:1; font-weight:600; font-size:12.5px;">Single-user prototype</span><span style="color:var(--faint); font-size:11px;">no sign-in</span></div>
+  `;
+
+  res.send(renderShell({ title: "Me", activeTab: "me", headerHtml, bodyHtml }));
+});
+
+// ---------------------------------------------------------------- My Day
+
+app.get("/my-day", async (_req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
+  // Ingest can run repeatedly, and each run does two inserts (calendar, then
+  // weather) a moment apart; group everything within 10s of the latest
+  // insert as "this run" so repeated test runs don't pile up duplicates.
+  const [{ data: recentEvents }, { data: insightRows }] = await Promise.all([
+    db.from("event").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(30),
+    db.from("insight").select("*").eq("user_id", user.id).neq("tier", "silent"),
+  ]);
+  const rows = recentEvents ?? [];
+  const latestCreatedAt = rows[0] ? new Date(rows[0].created_at).getTime() : null;
+  const events = rows
+    .filter((r) => latestCreatedAt !== null && Math.abs(new Date(r.created_at).getTime() - latestCreatedAt) < 10_000)
+    .sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
+
+  const insights = ((insightRows ?? []) as InsightRow[]).map(toInsight);
+  const insightsByEventId = new Map<string, Insight[]>();
+  for (const i of insights) {
+    for (const eventId of i.sourceEventIds) {
+      const list = insightsByEventId.get(eventId) ?? [];
+      list.push(i);
+      insightsByEventId.set(eventId, list);
+    }
+  }
+
+  const headerHtml = `
+    <button class="icon-btn" id="menu-toggle" aria-label="Open menu">${icon("menu")}</button>
+    <div class="spacer"><h1>My Day</h1><div class="mono" style="font-size:11px; color:var(--faint);">${new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</div></div>`;
+
+  const itemsHtml = (events ?? [])
+    .map((e) => {
+      const raw = e.raw as Record<string, unknown>;
+      const title = e.type === "calendar_event" ? String(raw.summary ?? "Event") : `Weather: ${String(raw.condition ?? "forecast")} (${String(raw.window ?? "")})`;
+      const related = insightsByEventId.get(e.id) ?? [];
+      const meta = DOMAIN_META[e.domain as Domain];
+      const annotations = related
+        .map((i) => `<div style="font-size:11px; color:var(--mist); margin-top:4px;">${tierPillHtml(i.tier)} ${escapeHtml(i.candidateText)}</div>`)
+        .join("");
+      return `
+      <div class="timeline-item">
+        <div class="timeline-time mono">${formatClockTime(e.occurred_at)}</div>
+        <div class="timeline-card" style="border-left-color:var(--${meta.chip === "iris" ? "iris" : meta.chip === "violet" ? "violet" : meta.chip === "good" ? "good" : meta.chip === "warn" ? "warn" : "rose"});">
+          <div class="t">${escapeHtml(title)}</div>
+          <div class="d">${meta.label}</div>
+          ${annotations}
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  const bodyHtml = `
+    <div class="timeline">
+      ${itemsHtml || `<div style="color:var(--faint); font-size:12.5px;">No events yet — run <code>npm run ingest</code>.</div>`}
+    </div>
+  `;
+
+  res.send(renderShell({ title: "My Day", activeTab: "myday", headerHtml, bodyHtml }));
+});
+
+// ---------------------------------------------------------------- Notifications
+
+app.get("/notifications", async (_req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
+
+  const [{ data: feedbackRows }, { data: deliveredRows }] = await Promise.all([
+    db
+      .from("feedback")
+      .select("*, insight:insight_id(domain, candidate_text, tier)")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(15),
+    db
+      .from("insight")
+      .select("*")
+      .eq("user_id", user.id)
+      .not("delivered_at", "is", null)
+      .order("delivered_at", { ascending: false })
+      .limit(15),
+  ]);
+
+  type Item = { at: string; html: string };
+  const items: Item[] = [];
+
+  for (const f of feedbackRows ?? []) {
+    const rel = f.insight as { domain: Domain; candidate_text: string; tier: Tier } | null;
+    if (!rel) continue;
+    const meta = DOMAIN_META[rel.domain];
+    const verb = f.action === "confirmed" ? "confirmed" : f.action === "dismissed" ? "dismissed" : "saw";
+    items.push({
+      at: f.created_at,
+      html: `<div class="chip ${meta.chip}">${icon(f.action === "confirmed" ? "check" : "x", "i i-sm")}</div>
+        <div style="flex:1;"><div style="font-size:12.5px;">You ${verb} a <b>${meta.label}</b> nudge: "${escapeHtml(rel.candidate_text)}"</div><div style="font-size:10.5px; color:var(--faint);">${relativeTime(f.created_at)}</div></div>`,
+    });
+  }
+
+  for (const row of (deliveredRows ?? []) as InsightRow[]) {
+    const i = toInsight(row);
+    const meta = DOMAIN_META[i.domain];
+    items.push({
+      at: i.deliveredAt ?? i.createdAt,
+      html: `<div class="chip violet">${icon("wave", "i i-sm")}</div>
+        <div style="flex:1;"><div style="font-size:12.5px;">New ${i.tier} nudge in <b>${meta.label}</b>: "${escapeHtml(i.candidateText)}"</div><div style="font-size:10.5px; color:var(--faint);">${relativeTime(i.deliveredAt ?? i.createdAt)}</div></div>`,
+    });
+  }
+
+  items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+  const headerHtml = `
+    <a href="/" class="icon-btn" aria-label="Back">${icon("chevron-l")}</a>
+    <div class="spacer"><h1>Notifications</h1></div>`;
+
+  const bodyHtml = `
+    ${items.length > 0 ? items.map((it) => `<div class="list-row" style="align-items:flex-start;">${it.html}</div>`).join("") : `<div style="color:var(--faint); font-size:12.5px; margin-top:12px;">Nothing yet.</div>`}
+  `;
+
+  res.send(renderShell({ title: "Notifications", showTabbar: false, headerHtml, bodyHtml }));
+});
+
+// ---------------------------------------------------------------- Voice
+
+app.get("/voice", async (_req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
   const { data: briefing } = await db
     .from("briefing")
     .select("*")
@@ -34,154 +426,140 @@ app.get("/", async (_req, res) => {
     .limit(1)
     .maybeSingle();
 
-  const { data: insightRows } = await db
-    .from("insight")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(20);
+  const headerHtml = `<div class="spacer"></div><a href="/" class="icon-btn" aria-label="Close">${icon("x")}</a>`;
 
-  const insights = ((insightRows ?? []) as InsightRow[]).map(toInsight);
-  const delivered = insights.filter((i: Insight) => i.tier !== "silent");
-  const silent = insights.filter((i: Insight) => i.tier === "silent");
+  const text = briefing?.composed_text ?? "";
 
-  const { data: trustScores } = await db
-    .from("trust_score")
-    .select("*")
-    .eq("user_id", user.id);
+  const bodyHtml = `
+    <div class="voice-stage">
+      <div class="orb-lg" id="voice-orb">
+        <div class="glow orb-glow"></div>
+        <div class="ring"></div>
+        <div class="core">
+          <span class="wave-bar" style="width:3px; height:14px; background:#0A0B14; border-radius:2px;"></span>
+          <span class="wave-bar" style="width:3px; height:26px; background:#0A0B14; border-radius:2px; animation-delay:.15s;"></span>
+          <span class="wave-bar" style="width:3px; height:18px; background:#0A0B14; border-radius:2px; animation-delay:.3s;"></span>
+          <span class="wave-bar" style="width:3px; height:30px; background:#0A0B14; border-radius:2px; animation-delay:.45s;"></span>
+          <span class="wave-bar" style="width:3px; height:16px; background:#0A0B14; border-radius:2px; animation-delay:.6s;"></span>
+        </div>
+      </div>
+      <div class="mono" style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--mist);" id="voice-state">Ready</div>
+      <div style="max-width:280px; font-size:14.5px; line-height:1.55;">
+        ${text ? escapeHtml(text) : "No briefing yet — run <code>npm run ingest</code>."}
+      </div>
+      ${
+        text
+          ? `<button class="btn btn-primary listen-btn" type="button" data-text="${escapeHtml(text)}" style="margin-top:6px;">${icon("wave", "i i-sm")}Play briefing</button>`
+          : ""
+      }
+      <div style="font-size:10.5px; color:var(--faint); max-width:240px;">Buddy speaks — this build doesn't listen. No microphone is used.</div>
+    </div>
+  `;
 
-  const rowHtml = (i: Insight) => `
-    <li class="insight tier-${i.tier}">
-      <div class="meta"><span class="tier-badge">${i.tier}</span> <span class="domain">${i.domain}</span> <span class="confidence">confidence ${Number(i.confidence).toFixed(2)}</span></div>
-      <div class="text">${escapeHtml(i.candidateText)}</div>
-      <form method="post" action="/feedback">
-        <input type="hidden" name="insightId" value="${i.id}" />
-        <input type="hidden" name="domain" value="${i.domain}" />
-        <button name="action" value="confirmed">Confirm</button>
-        <button name="action" value="dismissed">Dismiss</button>
-      </form>
-    </li>`;
+  const extraScript = `
+  (function () {
+    var orb = document.getElementById("voice-orb");
+    var state = document.getElementById("voice-state");
+    var audioEl = document.getElementById("app-audio");
+    if (!orb || !audioEl) return;
+    audioEl.addEventListener("play", function () { orb.style.transform = "scale(1.06)"; if (state) state.textContent = "Speaking…"; });
+    audioEl.addEventListener("pause", function () { orb.style.transform = "scale(1)"; if (state) state.textContent = "Ready"; });
+    audioEl.addEventListener("ended", function () { orb.style.transform = "scale(1)"; if (state) state.textContent = "Ready"; });
+  })();`;
 
-  const trustHtml = (trustScores ?? [])
-    .map(
-      (t) =>
-        `<li>${t.domain}: accuracy ${Number(t.accuracy).toFixed(2)} (${t.confirmed_count} confirmed / ${t.dismissed_count} dismissed), evidence ${t.evidence_count}</li>`
-    )
-    .join("");
-
-  res.send(`<!doctype html>
-<html>
-<head>
-<meta charset="utf-8" />
-<title>Buddy — Today's Briefing</title>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
-  h1 { font-size: 1.4rem; }
-  .briefing-row { display: flex; align-items: flex-start; gap: 12px; }
-  .briefing { background: #f5f5f4; border-radius: 12px; padding: 20px; font-size: 1.05rem; line-height: 1.5; flex: 1; }
-  #listen-btn { flex-shrink: 0; margin-top: 4px; padding: 8px 14px; border-radius: 8px; border: 1px solid #d4d4d4; background: white; cursor: pointer; font-size: 0.95rem; }
-  #listen-btn:disabled { opacity: 0.6; cursor: default; }
-  ul.insight-list { list-style: none; padding: 0; }
-  li.insight { border: 1px solid #e5e5e5; border-radius: 8px; padding: 12px 14px; margin: 10px 0; }
-  .meta { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: #666; margin-bottom: 6px; }
-  .tier-badge { font-weight: 600; }
-  .tier-proactive .tier-badge { color: #b45309; }
-  .tier-ambient .tier-badge { color: #2563eb; }
-  .tier-passive .tier-badge { color: #6b7280; }
-  button { margin-right: 8px; margin-top: 8px; cursor: pointer; }
-  .silent-section { opacity: 0.6; }
-  h2 { font-size: 1rem; margin-top: 32px; }
-</style>
-</head>
-<body>
-  <h1>Today's Briefing</h1>
-  <div class="briefing-row">
-    <div class="briefing" id="briefing-text">${briefing ? escapeHtml(briefing.composed_text).replace(/\n/g, "<br/>") : "No briefing yet — run <code>npm run ingest</code>."}</div>
-    ${briefing ? `<button id="listen-btn" type="button">🔊 Listen</button>` : ""}
-  </div>
-  <audio id="briefing-audio" hidden></audio>
-  <script>
-    (function () {
-      var btn = document.getElementById("listen-btn");
-      if (!btn) return;
-      var audioEl = document.getElementById("briefing-audio");
-      var textEl = document.getElementById("briefing-text");
-      var currentObjectUrl = null;
-
-      btn.addEventListener("click", function () {
-        var text = textEl.innerText;
-        btn.disabled = true;
-        var originalLabel = btn.textContent;
-        btn.textContent = "Generating…";
-        fetch("/speech", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: text }),
-        })
-          .then(function (res) {
-            if (!res.ok) throw new Error("Speech request failed: " + res.status);
-            return res.blob();
-          })
-          .then(function (blob) {
-            audioEl.pause();
-            if (currentObjectUrl) {
-              URL.revokeObjectURL(currentObjectUrl);
-            }
-            currentObjectUrl = URL.createObjectURL(blob);
-            audioEl.src = currentObjectUrl;
-            audioEl.hidden = false;
-            return audioEl.play();
-          })
-          .catch(function (err) {
-            console.error(err);
-            alert("Could not generate speech. Please try again.");
-          })
-          .finally(function () {
-            btn.disabled = false;
-            btn.textContent = originalLabel;
-          });
-      });
-
-      audioEl.addEventListener("ended", function () {
-        if (currentObjectUrl) {
-          URL.revokeObjectURL(currentObjectUrl);
-          currentObjectUrl = null;
-        }
-      });
-    })();
-  </script>
-
-  <h2>Delivered insights (${delivered.length})</h2>
-  <ul class="insight-list">${delivered.map(rowHtml).join("") || "<li>None yet.</li>"}</ul>
-
-  <h2>Stayed silent (${silent.length})</h2>
-  <ul class="insight-list silent-section">${silent.map(rowHtml).join("") || "<li>None.</li>"}</ul>
-
-  <h2>Trust scores by domain</h2>
-  <ul>${trustHtml || "<li>No trust scores yet.</li>"}</ul>
-</body>
-</html>`);
+  res.send(renderShell({ title: "Talk to Buddy", activeTab: "voice", showTabbar: false, headerHtml, bodyHtml, extraScript }));
 });
 
+// ---------------------------------------------------------------- Chats
+
+app.get("/chats", async (req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
+  const q = typeof req.query.q === "string" ? req.query.q : "";
+
+  const headerHtml = `
+    <a href="/" class="icon-btn" aria-label="Back">${icon("chevron-l")}</a>
+    <div class="spacer" style="display:flex; align-items:center; gap:8px;">
+      <div style="width:26px; height:26px; border-radius:50%; background:var(--grad-brand);"></div>
+      <div><div style="font-size:14px; font-weight:700;">Buddy</div></div>
+    </div>`;
+
+  let conversationHtml = `<div style="color:var(--faint); font-size:12.5px; margin-top:20px;">Ask something like "what's on my plate today" — Buddy replies with the latest real briefing.</div>`;
+
+  if (q.trim()) {
+    const { data: briefing } = await db
+      .from("briefing")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const reply = briefing
+      ? briefing.composed_text
+      : "No briefing has been generated yet — run `npm run ingest` first.";
+
+    conversationHtml = `
+      <div class="bubble-row user"><div class="bubble user">${escapeHtml(q)}</div></div>
+      <div class="bot-row">
+        <div class="bot-avatar"></div>
+        <div class="bubble bot">
+          ${escapeHtml(reply).replace(/\n/g, "<br/>")}
+          <div style="margin-top:8px;"><button class="btn btn-ghost btn-sm listen-btn" type="button" data-text="${escapeHtml(reply)}">${icon("wave", "i i-sm")}Listen</button></div>
+        </div>
+      </div>`;
+  }
+
+  const bodyHtml = `
+    ${conversationHtml}
+    <form method="get" action="/chats" class="chat-input-bar">
+      <input type="text" name="q" placeholder="Message Buddy…" autocomplete="off" value="${q ? "" : ""}" />
+      <button class="icon-btn" style="background:var(--grad-brand); border-color:transparent; color:#0A0B14;" type="submit" aria-label="Send">${icon("send", "i i-sm")}</button>
+    </form>
+  `;
+
+  res.send(renderShell({ title: "Chats", activeTab: "chats", headerHtml, bodyHtml }));
+});
+
+// ---------------------------------------------------------------- How it works
+
+app.get("/how-it-works", (_req, res) => {
+  const headerHtml = `<a href="/" class="icon-btn" aria-label="Back">${icon("chevron-l")}</a><div class="spacer"><h1>How Buddy works</h1></div>`;
+  const bodyHtml = `
+    <div class="card" style="margin-top:10px; font-size:13.5px; line-height:1.65;">
+      <p>Every candidate insight gets a <b>confidence score</b>:</p>
+      <p class="mono" style="font-size:12px; color:var(--mist);">confidence = directness × maturity × domain accuracy × stakes</p>
+      <p>That score decides which of four tiers it's allowed to reach:</p>
+      <ul style="padding-left:18px; color:var(--mist);">
+        <li><b style="color:var(--faint)">Silent</b> — held back, never shown</li>
+        <li><b style="color:var(--mist)">Passive</b> — shown quietly if you look</li>
+        <li><b style="color:var(--iris)">Ambient</b> — surfaced gently</li>
+        <li><b style="color:var(--violet)">Proactive</b> — surfaced up front</li>
+      </ul>
+      <p>Trust is tracked independently <b>per domain</b> — confirming or dismissing a nudge only moves that domain's accuracy, so a mistake about your commute doesn't cost trust with your family reminders.</p>
+    </div>
+  `;
+  res.send(renderShell({ title: "How it works", showTabbar: false, headerHtml, bodyHtml }));
+});
+
+// ---------------------------------------------------------------- Feedback
+
 app.post("/feedback", async (req, res) => {
-  const { insightId, domain, action } = req.body as {
+  const { insightId, domain, action, returnTo } = req.body as {
     insightId: string;
     domain: Domain;
     action: "confirmed" | "dismissed";
+    returnTo?: string;
   };
 
-  const email = process.env.BUDDY_USER_EMAIL;
-  if (!email) {
-    res.status(500).send("BUDDY_USER_EMAIL not set in .env");
-    return;
-  }
-  const user = await getOrCreateSingleUser(email);
+  const user = await getOrCreateSingleUser(requireEmail());
 
   await db.from("feedback").insert({ insight_id: insightId, user_id: user.id, action });
   await applyFeedback(user.id, domain, action);
 
-  res.redirect("/");
+  res.redirect(safeInternalPath(returnTo));
 });
+
+// ---------------------------------------------------------------- Speech
 
 const MAX_SPEECH_TEXT_LENGTH = 1500;
 

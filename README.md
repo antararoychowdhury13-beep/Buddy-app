@@ -59,3 +59,23 @@ and caches them under `node_modules/@huggingface/transformers/.cache/`
 offline and reuses the in-memory model, so it's much faster.
 
 **Voice/language:** English only, voice `af_heart`, for v1.
+
+## Web app
+
+A full mobile-style app UI, server-rendered (no build step, no client
+framework — plain Express routes + a shared shell in `src/webapp/`):
+
+| Route | What it shows |
+|---|---|
+| `/` | Home — real briefing, real delivered/silent insight counts, nudge feed |
+| `/insight/:id` | Nudge detail — confidence, tier, per-insight Listen, Confirm/Dismiss |
+| `/my-day` | Chronological timeline built from real calendar/weather `event` rows |
+| `/me` | Real per-domain trust bars, real connected accounts |
+| `/notifications` | Real feed from the `feedback` table + newly delivered insights |
+| `/voice` | Full-screen "Talk to Buddy" — plays the real briefing aloud (TTS only, no mic) |
+| `/chats` | Ask a question; Buddy's reply is the real latest composed briefing |
+| `/how-it-works` | Static explanation of the tiering mechanism |
+
+`src/webapp/design.ts` holds the design tokens/CSS/icon sprite, `shell.ts`
+wraps every route in the shared header/tabbar/menu-drawer, `helpers.ts` has
+the domain→icon/color mapping and small formatting utilities.
