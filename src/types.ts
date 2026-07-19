@@ -100,3 +100,15 @@ export interface TrustScoreRecord {
   evidence_count: number;
   accuracy: number;
 }
+
+export type FactCategory = "home" | "office" | "family" | "contact" | "festival" | "other";
+
+export interface FactRecord {
+  id: string;
+  user_id: string;
+  category: FactCategory;
+  key: string;
+  value: string;
+  created_at: string;
+  updated_at: string;
+}

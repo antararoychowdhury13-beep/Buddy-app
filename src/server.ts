@@ -6,7 +6,8 @@ import type { Domain, Insight, InsightRow, Tier } from "./types.js";
 import { toInsight } from "./types.js";
 import { voiceService } from "./voice/index.js";
 import { transcribeAudio } from "./voice/speechToText.js";
-import { answerQuestion, type QuestionContext } from "./reasoning.js";
+import { answerQuestion, type QuestionContext, type RememberFactInput } from "./reasoning.js";
+import { deleteFact, getFacts, upsertFact } from "./factStore.js";
 import { escapeHtml, icon } from "./webapp/design.js";
 import { renderShell } from "./webapp/shell.js";
 import { connectRouter, startGoogleOAuthCallbackServer } from "./webapp/connect.js";
@@ -30,12 +31,13 @@ function requireEmail(): string {
   return email;
 }
 
-/** Real context for answerQuestion() — delivered insights, trust scores, and today's raw events. */
+/** Real context for answerQuestion() — delivered insights, trust scores, saved facts, and today's raw events. */
 async function gatherQuestionContext(userId: string): Promise<QuestionContext> {
-  const [{ data: insightRows }, { data: trustRows }, { data: eventRows }] = await Promise.all([
+  const [{ data: insightRows }, { data: trustRows }, { data: eventRows }, factRows] = await Promise.all([
     db.from("insight").select("*").eq("user_id", userId).neq("tier", "silent").order("created_at", { ascending: false }).limit(10),
     db.from("trust_score").select("*").eq("user_id", userId),
     db.from("event").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(10),
+    getFacts(userId),
   ]);
 
   const deliveredInsights = ((insightRows ?? []) as InsightRow[]).map(toInsight).map((i) => ({
@@ -61,7 +63,15 @@ async function gatherQuestionContext(userId: string): Promise<QuestionContext> {
     return { type: e.type as string, domain: e.domain as string, summary, at: e.occurred_at as string };
   });
 
-  return { now: new Date().toISOString(), deliveredInsights, trustScores, todaysEvents };
+  const facts = factRows.map((f) => ({ category: f.category, key: f.key, value: f.value }));
+
+  return { now: new Date().toISOString(), deliveredInsights, trustScores, todaysEvents, facts };
+}
+
+function makeRememberFactHandler(userId: string) {
+  return async (fact: RememberFactInput) => {
+    await upsertFact(userId, fact);
+  };
 }
 
 function nudgeCardHtml(i: Insight, opts: { showDetailsLink?: boolean } = {}): string {
@@ -795,7 +805,7 @@ app.get("/chats", async (req, res) => {
     let reply: string;
     try {
       const context = await gatherQuestionContext(user.id);
-      reply = await answerQuestion(q, context);
+      reply = await answerQuestion(q, context, makeRememberFactHandler(user.id));
     } catch (err) {
       console.error("Chats answer failed:", err);
       reply = "I couldn't work that out just now — try again in a moment.";
@@ -910,7 +920,7 @@ app.post("/ask", async (req, res) => {
   try {
     const user = await getOrCreateSingleUser(requireEmail());
     const context = await gatherQuestionContext(user.id);
-    const answer = await answerQuestion(question, context);
+    const answer = await answerQuestion(question, context, makeRememberFactHandler(user.id));
     res.json({ answer });
   } catch (err) {
     console.error("Answering question failed:", err);

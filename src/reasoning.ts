@@ -61,21 +61,41 @@ export interface QuestionContext {
   deliveredInsights: { domain: string; tier: string; confidence: number; text: string }[];
   trustScores: { domain: string; accuracy: number; confirmed: number; dismissed: number }[];
   todaysEvents: { type: string; domain: string; summary: string; at: string }[];
+  facts: { category: string; key: string; value: string }[];
 }
 
-/**
- * Answers a free-form question (typed or spoken). Two different kinds of
- * question get two different treatments:
- *  - Anything about the user's own day (meetings, weather, trust, nudges)
- *    must be grounded ONLY in the real data below — never invented.
- *  - Anything else (the time, general knowledge, definitions, quick
- *    calculations) Buddy answers normally, like any capable assistant would
- *    — refusing those just because they're not in the app's data would be
- *    unhelpfully narrow, not careful.
- * Deliberately conversational rather than agentic either way: it can
- * describe, not act — no confirm/dismiss/create on the user's behalf.
- */
-export async function answerQuestion(question: string, context: QuestionContext): Promise<string> {
+export interface RememberFactInput {
+  category: "home" | "office" | "family" | "contact" | "festival" | "other";
+  key: string;
+  value: string;
+}
+
+export type RememberFactHandler = (fact: RememberFactInput) => Promise<void>;
+
+const REMEMBER_FACT_TOOL: Anthropic.Tool = {
+  name: "remember_fact",
+  description:
+    "Save a personal fact the user explicitly wants remembered for later — home/office location or commute route, a family member's contact info, a festival date, or any other detail they ask you to remember or note down. Only call this when the user is clearly asking you to remember/save/note something (e.g. \"remember that...\", \"my wife's number is..., save that\"), never just because a fact was mentioned in passing, and never for a plain question.",
+  input_schema: {
+    type: "object",
+    properties: {
+      category: {
+        type: "string",
+        enum: ["home", "office", "family", "contact", "festival", "other"],
+        description: "Broad category for the fact",
+      },
+      key: {
+        type: "string",
+        description:
+          "Short, stable, human-readable label for this fact, e.g. 'home address', 'wife's phone number', 'office commute route', 'Diwali date'",
+      },
+      value: { type: "string", description: "The actual value to remember" },
+    },
+    required: ["category", "key", "value"],
+  },
+};
+
+function buildSystemPrompt(context: QuestionContext): string {
   const describeInsights = (list: QuestionContext["deliveredInsights"]) =>
     list.length > 0
       ? list.map((i) => `- [${i.domain}, ${i.tier}, confidence ${i.confidence.toFixed(2)}] ${i.text}`).join("\n")
@@ -93,9 +113,15 @@ export async function answerQuestion(question: string, context: QuestionContext)
       ? list.map((e) => `- [${e.domain}] ${e.summary} (${new Date(e.at).toLocaleString("en-US")})`).join("\n")
       : "(none)";
 
-  const prompt = `You are Buddy, a thoughtful chief-of-staff assistant, answering a question the user just asked (by voice or text).
+  const describeFacts = (list: QuestionContext["facts"]) =>
+    list.length > 0 ? list.map((f) => `- [${f.category}] ${f.key}: ${f.value}`).join("\n") : "(nothing saved yet)";
+
+  return `You are Buddy, a thoughtful chief-of-staff assistant, answering a question the user just asked (by voice or text).
 
 Right now it is: ${new Date(context.now).toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" })}
+
+Personal facts the user has asked you to remember:
+${describeFacts(context.facts)}
 
 Today's delivered insights (already cleared for the user to see):
 ${describeInsights(context.deliveredInsights)}
@@ -106,22 +132,65 @@ ${describeTrust(context.trustScores)}
 Today's raw calendar/weather events:
 ${describeEvents(context.todaysEvents)}
 
-The user asked: "${question}"
-
 How to answer:
 - If it's about their own day — meetings, weather, trust scores, nudges — ground it ONLY in the data above. Never invent a meeting, forecast, or number that isn't listed; if the data doesn't cover it, say so plainly.
+- If it's asking to recall a personal fact, use the "Personal facts" list above. If it's not there, say you don't have that saved rather than guessing.
+- If the user is clearly asking you to remember/save/note a new personal fact, use the remember_fact tool rather than just replying in text.
 - If it's general (the time, a fact, a definition, quick math, anything not about their personal data) — just answer it directly and helpfully, the way any competent assistant would. Don't refuse or deflect just because it's not in the data above — use the current time given above for anything time/date-related.
 - If the question itself is empty, garbled, or you genuinely can't tell what was asked, say so briefly and ask them to repeat it — don't pivot to volunteering unrelated information instead.
-- You cannot confirm/dismiss insights or create events yourself; if asked to do something actionable, say the user should do it from the app rather than pretending to have done it.
+- You cannot confirm/dismiss insights or create calendar events yourself; if asked to do something actionable besides remembering a fact, say the user should do it from the app rather than pretending to have done it.
 
 Reply in 1-4 sentences, plain text, no markdown, no headers — the way a sharp human assistant would answer out loud.`;
+}
 
-  const message = await getClient().messages.create({
+/**
+ * Answers a free-form question (typed or spoken), with one real tool
+ * available: remembering a personal fact. Claude itself decides — from the
+ * conversation, not a keyword match — whether the user is asking a question
+ * or asking it to remember something, and only calls the tool in the latter
+ * case. Otherwise stays conversational, not agentic: it can describe, not
+ * act — no confirm/dismiss/create-event on the user's behalf.
+ */
+export async function answerQuestion(
+  question: string,
+  context: QuestionContext,
+  onRememberFact?: RememberFactHandler
+): Promise<string> {
+  const client = getClient();
+  const system = buildSystemPrompt(context);
+  const messages: Anthropic.MessageParam[] = [{ role: "user", content: question }];
+
+  let response = await client.messages.create({
     model: "claude-sonnet-5",
     max_tokens: 300,
-    messages: [{ role: "user", content: prompt }],
+    system,
+    tools: onRememberFact ? [REMEMBER_FACT_TOOL] : undefined,
+    messages,
   });
 
-  const text = message.content.find((block) => block.type === "text");
+  const toolUse = response.content.find((block) => block.type === "tool_use");
+  if (toolUse && toolUse.type === "tool_use" && onRememberFact) {
+    let resultText = "Saved.";
+    try {
+      await onRememberFact(toolUse.input as RememberFactInput);
+    } catch (err) {
+      resultText = `Failed to save: ${(err as Error).message}`;
+    }
+
+    messages.push({ role: "assistant", content: response.content });
+    messages.push({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: toolUse.id, content: resultText }],
+    });
+
+    response = await client.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 300,
+      system,
+      messages,
+    });
+  }
+
+  const text = response.content.find((block) => block.type === "text");
   return text && text.type === "text" ? text.text : "";
 }
