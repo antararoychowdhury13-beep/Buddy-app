@@ -5,6 +5,7 @@ import { applyFeedback } from "./trustScoreStore.js";
 import type { Domain, Insight, InsightRow, Tier } from "./types.js";
 import { toInsight } from "./types.js";
 import { voiceService } from "./voice/index.js";
+import { transcribeAudio } from "./voice/speechToText.js";
 import { answerQuestion, type QuestionContext } from "./reasoning.js";
 import { escapeHtml, icon } from "./webapp/design.js";
 import { renderShell } from "./webapp/shell.js";
@@ -629,52 +630,113 @@ app.get("/voice", async (_req, res) => {
       errorBox.innerHTML = "";
     }
 
-    var ERROR_MESSAGES = {
-      network: "Couldn't reach the speech recognition service. If you're on Brave, Arc, or have an ad-blocker/VPN active, try disabling it for this site, or switch to plain Chrome.",
-      "not-allowed": "Microphone access is blocked for this site. Allow it in your browser's site settings, then reload.",
-      "service-not-allowed": "Microphone access is blocked for this site. Allow it in your browser's site settings, then reload.",
-      "audio-capture": "No microphone was found. Check that one is connected and not in use by another app.",
-    };
+    // Records raw mic audio locally and sends it to /transcribe (a local
+    // Whisper model) instead of the browser's built-in SpeechRecognition,
+    // which depends on reaching Google's speech servers and can fail
+    // unpredictably depending on network/browser/extensions. This has no
+    // external network dependency at all once the model is cached.
+    var TARGET_SAMPLE_RATE = 16000;
+    var mediaSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
-    var SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognitionCtor) {
-      var recognition = new SpeechRecognitionCtor();
-      recognition.lang = "en-US";
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 1;
-      var listening = false;
-      var retriedNetworkError = false;
+    if (mediaSupported) {
+      var recording = false;
+      var audioCtx = null;
+      var stream = null;
+      var sourceNode = null;
+      var processorNode = null;
+      var gainNode = null;
+      var chunks = [];
 
-      recognition.addEventListener("start", function () { listening = true; clearError(); setState("Listening…"); });
-      recognition.addEventListener("end", function () { listening = false; });
-      recognition.addEventListener("result", function () { retriedNetworkError = false; });
-      recognition.addEventListener("error", function (e) {
-        listening = false;
-        setState("Tap to ask");
+      function startRecording() {
+        clearError();
+        navigator.mediaDevices
+          .getUserMedia({ audio: true })
+          .then(function (s) {
+            stream = s;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            sourceNode = audioCtx.createMediaStreamSource(stream);
+            processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
+            gainNode = audioCtx.createGain();
+            gainNode.gain.value = 0; // silence the loopback so the user doesn't hear themselves
+            chunks = [];
+            processorNode.onaudioprocess = function (e) {
+              chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+            };
+            sourceNode.connect(processorNode);
+            processorNode.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            recording = true;
+            setState("Listening… tap to stop");
+          })
+          .catch(function (err) {
+            console.error(err);
+            showError("Microphone access is blocked for this site. Allow it in your browser's site settings, then reload.");
+          });
+      }
 
-        if (e.error === "aborted" || e.error === "no-speech") return;
+      function stopRecordingAndTranscribe() {
+        if (!recording) return;
+        recording = false;
+        var nativeRate = audioCtx.sampleRate;
+        processorNode.disconnect();
+        sourceNode.disconnect();
+        gainNode.disconnect();
+        stream.getTracks().forEach(function (t) { t.stop(); });
 
-        // Transient network hiccups are common with this API; retry once
-        // silently before bothering the user with a message.
-        if (e.error === "network" && !retriedNetworkError) {
-          retriedNetworkError = true;
-          setTimeout(function () {
-            try { recognition.start(); } catch (err) { console.error(err); }
-          }, 400);
-          return;
-        }
+        var totalLength = chunks.reduce(function (sum, c) { return sum + c.length; }, 0);
+        var merged = new Float32Array(totalLength);
+        var offset = 0;
+        chunks.forEach(function (c) { merged.set(c, offset); offset += c.length; });
+        chunks = [];
 
-        showError(ERROR_MESSAGES[e.error] || ("Microphone error: " + e.error + "."));
-      });
-      recognition.addEventListener("result", function (e) {
-        askAndSpeak(e.results[0][0].transcript);
-      });
+        var ctxToClose = audioCtx;
+        audioCtx = null;
+        setState("Thinking…");
+
+        var OfflineCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        var outLength = Math.max(1, Math.ceil((merged.length * TARGET_SAMPLE_RATE) / nativeRate));
+        var offlineCtx = new OfflineCtor(1, outLength, TARGET_SAMPLE_RATE);
+        var buffer = offlineCtx.createBuffer(1, merged.length, nativeRate);
+        buffer.copyToChannel(merged, 0);
+        var src = offlineCtx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(offlineCtx.destination);
+        src.start();
+
+        offlineCtx
+          .startRendering()
+          .then(function (rendered) {
+            ctxToClose.close();
+            var resampled = rendered.getChannelData(0);
+            return fetch("/transcribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/octet-stream" },
+              body: resampled,
+            });
+          })
+          .then(function (res) {
+            if (!res.ok) return res.json().then(function (e) { throw new Error(e.error || "Transcription failed"); });
+            return res.json();
+          })
+          .then(function (data) {
+            var transcript = (data.transcript || "").trim();
+            if (!transcript) {
+              setState("Tap to ask");
+              showError("Didn't catch that — try again and speak clearly.");
+              return;
+            }
+            askAndSpeak(transcript);
+          })
+          .catch(function (err) {
+            console.error(err);
+            setState("Tap to ask");
+            showError("Couldn't transcribe that. Please try again.");
+          });
+      }
 
       orb.addEventListener("click", function () {
-        if (listening) { recognition.stop(); return; }
-        clearError();
-        retriedNetworkError = false;
-        try { recognition.start(); } catch (err) { console.error(err); }
+        if (recording) { stopRecordingAndTranscribe(); return; }
+        startRecording();
       });
       orb.addEventListener("keydown", function (e) {
         if (e.key === "Enter" || e.key === " ") {
@@ -778,6 +840,35 @@ app.post("/feedback", async (req, res) => {
 
   res.redirect(safeInternalPath(returnTo));
 });
+
+// ---------------------------------------------------------------- Transcribe (local Whisper)
+
+const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // ~5 min of mono 16kHz float32 audio
+
+app.post(
+  "/transcribe",
+  express.raw({ type: "application/octet-stream", limit: MAX_AUDIO_BYTES }),
+  async (req, res) => {
+    const buf = req.body as Buffer;
+    if (!Buffer.isBuffer(buf) || buf.length === 0) {
+      res.status(400).json({ error: "audio body is required" });
+      return;
+    }
+    if (buf.length % 4 !== 0) {
+      res.status(400).json({ error: "audio body must be raw 32-bit float PCM samples" });
+      return;
+    }
+
+    try {
+      const samples = new Float32Array(buf.buffer, buf.byteOffset, buf.length / Float32Array.BYTES_PER_ELEMENT);
+      const transcript = await transcribeAudio(samples);
+      res.json({ transcript });
+    } catch (err) {
+      console.error("Transcription failed:", err);
+      res.status(502).json({ error: "Could not transcribe audio" });
+    }
+  }
+);
 
 // ---------------------------------------------------------------- Ask (real Q&A)
 

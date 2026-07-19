@@ -52,20 +52,40 @@ to anything.
 ```
 npm test           # trust engine unit tests (tiering, confidence formula)
 npm run test:speech  # /speech endpoint smoke test (see Voice section)
+npm run test:stt   # local Whisper round-trip test (see Voice section)
 npm run typecheck  # type-checks src/ and scripts/ together
 npm run build      # compiles src/ to dist/
 ```
 
-## Voice (Kokoro)
+## Voice (Kokoro for speech out, Whisper for speech in)
 
 Every page with a "Listen" button synthesizes that text to speech and plays
 it back — manual playback only, triggered by a click, never autoplay.
 
 The `/voice` screen additionally takes microphone input: tap the orb, ask a
-question out loud, and Buddy answers using the browser's built-in
-`SpeechRecognition` API (Chrome/Edge; gracefully disabled with a message in
-browsers that don't support it) — see **Ask Buddy** below for how the
-answer itself is generated.
+question out loud. Recording, resampling to 16kHz, and transcription all
+happen locally — no cloud speech API. This was a deliberate choice over the
+browser's built-in `SpeechRecognition`: that API silently depends on
+reaching Google's speech servers in the background, which fails
+unpredictably behind ad-blockers, VPNs, or non-Chrome browsers (Brave/Arc
+disable it outright) with an unhelpful "network" error that's outside any
+app code's control to fix. A local Whisper model has no such dependency.
+See **Ask Buddy** below for how the answer itself is generated.
+
+**Speech-to-text architecture:**
+```
+src/voice/speechToText.ts   transcribeAudio(samples) -> text, via @huggingface/transformers'
+                             automatic-speech-recognition pipeline (Xenova/whisper-tiny.en, local, quantized)
+POST /transcribe             raw 32-bit float PCM mono @ 16kHz in the body -> { transcript }
+```
+The browser captures mic audio via `getUserMedia` + `ScriptProcessorNode`,
+resamples it to 16kHz with an `OfflineAudioContext`, and posts the raw
+Float32 samples directly (no WAV wrapping needed) — gracefully disabled
+with a message if `getUserMedia` isn't available at all.
+
+Run `npm run test:stt` to verify the pipeline without needing a live human
+voice: it has Kokoro synthesize a sentence, feeds that audio into Whisper,
+and checks the transcript round-trips correctly.
 
 **Architecture:** the rest of Buddy never knows which TTS engine is in use.
 Everything goes through one interface:

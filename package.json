@@ -11,6 +11,7 @@
     "auth:google": "tsx scripts/auth-google.ts",
     "test": "tsx scripts/test-trust-engine.ts",
     "test:speech": "tsx scripts/test-speech-smoke.ts",
+    "test:stt": "tsx scripts/test-stt-roundtrip.ts",
     "typecheck": "tsc -p tsconfig.scripts.json"
   },
   "dependencies": {
