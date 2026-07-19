@@ -11,15 +11,41 @@ from whatever clears the bar, and can speak that briefing aloud on request.
    - `SUPABASE_URL` / `SUPABASE_ANON_KEY` — the Postgres project backing everything
    - `ANTHROPIC_API_KEY` — used to compose the daily briefing (starts with `sk-ant-`, not `sk-proj-`)
    - `BUDDY_USER_EMAIL` — the single user this prototype runs for
+   - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — only needed to connect Calendar (see below); identify the OAuth app itself, not a user's connection
 
 ## Running
 
 ```
-npm run ingest     # pull mock calendar/weather events, score them, compose a briefing
-npm run dev        # serve the briefing page at http://localhost:3000
+npm run dev        # serves the app at http://localhost:3000
+npm run ingest     # pull calendar/weather events, score them, compose a briefing
 ```
 
-Run `ingest` at least once before `dev` so there's a briefing to display.
+Run `ingest` at least once so there's a briefing to display. Calendar and
+Weather each need to be connected first (from the Me page, or via
+`npm run auth:google` for Calendar) — see **Connectors** below.
+
+## Connectors
+
+Calendar and Weather credentials live in the `connector` table, not `.env`
+— manage them from the **Me** page in the running app:
+
+- **Weather** — click Connect, paste a free [OpenWeatherMap](https://openweathermap.org/api) API key and a location (`City,CountryCode`).
+- **Calendar** — click Connect, sign in and approve on Google's consent screen, you're bounced back connected. Requires a one-time Google Cloud Console setup first:
+  1. Create/select a project at [console.cloud.google.com](https://console.cloud.google.com), enable the **Google Calendar API**.
+  2. **OAuth consent screen**: External user type, add scope `.../auth/calendar.readonly`, add yourself as a **test user** (the app stays in Testing mode).
+  3. **Credentials → Create OAuth client ID**, type **Web application**, add `http://localhost:3939/oauth2callback` under Authorized redirect URIs.
+  4. Put the resulting Client ID/Secret in `.env`.
+
+  The app runs its own tiny listener on `localhost:3939` to catch Google's
+  redirect (`src/webapp/connect.ts`) — deliberately the same fixed port/path
+  for both the in-app Connect button and the `npm run auth:google` CLI
+  fallback, so registering that one redirect URI is a one-time setup step
+  regardless of which flow you use.
+
+Disconnecting (also from the Me page) clears the stored credentials and
+revokes the Google token — ingest will then correctly refuse to run for
+that connector until it's reconnected, rather than silently falling back
+to anything.
 
 ## Tests
 
