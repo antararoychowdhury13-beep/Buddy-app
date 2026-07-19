@@ -5,6 +5,7 @@ import { applyFeedback } from "./trustScoreStore.js";
 import type { Domain, Insight, InsightRow, Tier } from "./types.js";
 import { toInsight } from "./types.js";
 import { voiceService } from "./voice/index.js";
+import { answerQuestion, type QuestionContext } from "./reasoning.js";
 import { escapeHtml, icon } from "./webapp/design.js";
 import { renderShell } from "./webapp/shell.js";
 import { connectRouter, startGoogleOAuthCallbackServer } from "./webapp/connect.js";
@@ -26,6 +27,40 @@ function requireEmail(): string {
   const email = process.env.BUDDY_USER_EMAIL;
   if (!email) throw new Error("BUDDY_USER_EMAIL not set in .env");
   return email;
+}
+
+/** Real context for answerQuestion() — delivered insights, trust scores, and today's raw events. */
+async function gatherQuestionContext(userId: string): Promise<QuestionContext> {
+  const [{ data: insightRows }, { data: trustRows }, { data: eventRows }] = await Promise.all([
+    db.from("insight").select("*").eq("user_id", userId).neq("tier", "silent").order("created_at", { ascending: false }).limit(10),
+    db.from("trust_score").select("*").eq("user_id", userId),
+    db.from("event").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(10),
+  ]);
+
+  const deliveredInsights = ((insightRows ?? []) as InsightRow[]).map(toInsight).map((i) => ({
+    domain: i.domain,
+    tier: i.tier,
+    confidence: i.confidence,
+    text: i.candidateText,
+  }));
+
+  const trustScores = (trustRows ?? []).map((t) => ({
+    domain: t.domain as string,
+    accuracy: Number(t.accuracy),
+    confirmed: t.confirmed_count as number,
+    dismissed: t.dismissed_count as number,
+  }));
+
+  const todaysEvents = (eventRows ?? []).map((e) => {
+    const raw = e.raw as Record<string, unknown>;
+    const summary =
+      e.type === "calendar_event"
+        ? String(raw.summary ?? "Event")
+        : `Weather: ${String(raw.condition ?? "forecast")} (${String(raw.window ?? "")})`;
+    return { type: e.type as string, domain: e.domain as string, summary, at: e.occurred_at as string };
+  });
+
+  return { deliveredInsights, trustScores, todaysEvents };
 }
 
 function nudgeCardHtml(i: Insight, opts: { showDetailsLink?: boolean } = {}): string {
@@ -490,7 +525,7 @@ app.get("/voice", async (_req, res) => {
 
   const bodyHtml = `
     <div class="voice-stage">
-      <div class="orb-lg" id="voice-orb" role="button" tabindex="0" aria-label="Play briefing" style="cursor:pointer;">
+      <div class="orb-lg" id="voice-orb" role="button" tabindex="0" aria-label="Ask Buddy a question" style="cursor:pointer;">
         <div class="glow orb-glow"></div>
         <div class="ring"></div>
         <div class="core">
@@ -501,16 +536,17 @@ app.get("/voice", async (_req, res) => {
           <span class="wave-bar" style="width:3px; height:16px; background:#0A0B14; border-radius:2px; animation-delay:.6s;"></span>
         </div>
       </div>
-      <div class="mono" style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--mist);" id="voice-state">Ready</div>
-      <div style="max-width:280px; font-size:14.5px; line-height:1.55;">
+      <div class="mono" style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--mist);" id="voice-state">Tap to ask</div>
+      <div id="voice-default-text" style="max-width:280px; font-size:14.5px; line-height:1.55;">
         ${text ? escapeHtml(text) : "No briefing yet — run <code>npm run ingest</code>."}
       </div>
+      <div id="voice-transcript" hidden style="max-width:300px; font-size:13.5px; line-height:1.55; text-align:left; display:flex; flex-direction:column; gap:8px;"></div>
       ${
         text
-          ? `<button class="btn btn-primary listen-btn" type="button" data-text="${escapeHtml(text)}" style="margin-top:6px;">${icon("wave", "i i-sm")}Play briefing</button>`
+          ? `<button class="btn btn-ghost btn-sm listen-btn" type="button" data-text="${escapeHtml(text)}" style="margin-top:6px;">${icon("wave", "i i-sm")}Play today's briefing</button>`
           : ""
       }
-      <div style="font-size:10.5px; color:var(--faint); max-width:240px;">Buddy speaks — this build doesn't listen. No microphone is used.</div>
+      <div style="font-size:10.5px; color:var(--faint); max-width:240px;">Tap the orb and ask a question out loud — Buddy answers from your real data.</div>
     </div>
   `;
 
@@ -519,25 +555,104 @@ app.get("/voice", async (_req, res) => {
     var orb = document.getElementById("voice-orb");
     var state = document.getElementById("voice-state");
     var audioEl = document.getElementById("app-audio");
+    var transcriptBox = document.getElementById("voice-transcript");
+    var defaultText = document.getElementById("voice-default-text");
     if (!orb || !audioEl) return;
-    audioEl.addEventListener("play", function () { orb.style.transform = "scale(1.06)"; if (state) state.textContent = "Speaking…"; });
-    audioEl.addEventListener("pause", function () { orb.style.transform = "scale(1)"; if (state) state.textContent = "Ready"; });
-    audioEl.addEventListener("ended", function () { orb.style.transform = "scale(1)"; if (state) state.textContent = "Ready"; });
 
-    // Tapping the orb itself plays the briefing too — forward to the real
-    // Listen button rather than duplicating its fetch/disable logic (and to
-    // avoid stomping the orb's own glow/ring/core markup mid-generation).
-    function triggerPlay() {
-      var btn = document.querySelector(".listen-btn");
-      if (btn && !btn.disabled) btn.click();
+    audioEl.addEventListener("play", function () { orb.style.transform = "scale(1.06)"; setState("Speaking…"); });
+    audioEl.addEventListener("pause", function () { orb.style.transform = "scale(1)"; setState("Tap to ask"); });
+    audioEl.addEventListener("ended", function () { orb.style.transform = "scale(1)"; setState("Tap to ask"); });
+
+    function setState(text) { if (state) state.textContent = text; }
+    function escapeForDisplay(s) {
+      var div = document.createElement("div");
+      div.textContent = s;
+      return div.innerHTML;
     }
-    orb.addEventListener("click", triggerPlay);
-    orb.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        triggerPlay();
+
+    function speak(text) {
+      return fetch("/speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      })
+        .then(function (res) {
+          if (!res.ok) throw new Error("Speech failed: " + res.status);
+          return res.blob();
+        })
+        .then(function (blob) {
+          audioEl.pause();
+          audioEl.src = URL.createObjectURL(blob);
+          return audioEl.play();
+        });
+    }
+
+    function askAndSpeak(question) {
+      if (defaultText) defaultText.hidden = true;
+      if (transcriptBox) {
+        transcriptBox.hidden = false;
+        transcriptBox.innerHTML = '<div><span class="mono" style="color:var(--iris); font-size:10.5px;">YOU</span><br/>' + escapeForDisplay(question) + "</div>";
       }
-    });
+      setState("Thinking…");
+      fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: question }),
+      })
+        .then(function (res) {
+          if (!res.ok) return res.json().then(function (e) { throw new Error(e.error || "Ask failed"); });
+          return res.json();
+        })
+        .then(function (data) {
+          if (transcriptBox) {
+            transcriptBox.innerHTML += '<div><span class="mono" style="color:var(--violet); font-size:10.5px;">BUDDY</span><br/>' + escapeForDisplay(data.answer) + "</div>";
+          }
+          return speak(data.answer);
+        })
+        .catch(function (err) {
+          console.error(err);
+          setState("Tap to ask");
+          alert("Could not get an answer — please try again.");
+        });
+    }
+
+    var SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognitionCtor) {
+      var recognition = new SpeechRecognitionCtor();
+      recognition.lang = "en-US";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      var listening = false;
+
+      recognition.addEventListener("start", function () { listening = true; setState("Listening…"); });
+      recognition.addEventListener("end", function () { listening = false; });
+      recognition.addEventListener("error", function (e) {
+        listening = false;
+        setState("Tap to ask");
+        if (e.error !== "aborted" && e.error !== "no-speech") {
+          alert("Microphone error: " + e.error + ". Check your browser's microphone permission for this site.");
+        }
+      });
+      recognition.addEventListener("result", function (e) {
+        askAndSpeak(e.results[0][0].transcript);
+      });
+
+      orb.addEventListener("click", function () {
+        if (listening) { recognition.stop(); return; }
+        try { recognition.start(); } catch (err) { console.error(err); }
+      });
+      orb.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          orb.click();
+        }
+      });
+    } else {
+      setState("No mic in this browser");
+      orb.style.cursor = "default";
+      orb.setAttribute("aria-disabled", "true");
+      orb.removeAttribute("tabindex");
+    }
   })();`;
 
   res.send(renderShell({ title: "Talk to Buddy", activeTab: "voice", showTabbar: false, headerHtml, bodyHtml, extraScript }));
@@ -556,20 +671,17 @@ app.get("/chats", async (req, res) => {
       <div><div style="font-size:14px; font-weight:700;">Buddy</div></div>
     </div>`;
 
-  let conversationHtml = `<div style="color:var(--faint); font-size:12.5px; margin-top:20px;">Ask something like "what's on my plate today" — Buddy replies with the latest real briefing.</div>`;
+  let conversationHtml = `<div style="color:var(--faint); font-size:12.5px; margin-top:20px;">Ask something like "what's on my plate today" or "will it rain later" — Buddy answers from your real data.</div>`;
 
   if (q.trim()) {
-    const { data: briefing } = await db
-      .from("briefing")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const reply = briefing
-      ? briefing.composed_text
-      : "No briefing has been generated yet — run `npm run ingest` first.";
+    let reply: string;
+    try {
+      const context = await gatherQuestionContext(user.id);
+      reply = await answerQuestion(q, context);
+    } catch (err) {
+      console.error("Chats answer failed:", err);
+      reply = "I couldn't work that out just now — try again in a moment.";
+    }
 
     conversationHtml = `
       <div class="bubble-row user"><div class="bubble user">${escapeHtml(q)}</div></div>
@@ -630,6 +742,33 @@ app.post("/feedback", async (req, res) => {
   await applyFeedback(user.id, domain, action);
 
   res.redirect(safeInternalPath(returnTo));
+});
+
+// ---------------------------------------------------------------- Ask (real Q&A)
+
+const MAX_QUESTION_LENGTH = 500;
+
+app.post("/ask", async (req, res) => {
+  const { question } = (req.body ?? {}) as { question?: unknown };
+
+  if (typeof question !== "string" || !question.trim()) {
+    res.status(400).json({ error: "question is required and must be a non-empty string" });
+    return;
+  }
+  if (question.length > MAX_QUESTION_LENGTH) {
+    res.status(400).json({ error: `question must be ${MAX_QUESTION_LENGTH} characters or fewer` });
+    return;
+  }
+
+  try {
+    const user = await getOrCreateSingleUser(requireEmail());
+    const context = await gatherQuestionContext(user.id);
+    const answer = await answerQuestion(question, context);
+    res.json({ answer });
+  } catch (err) {
+    console.error("Answering question failed:", err);
+    res.status(502).json({ error: "Could not answer that right now" });
+  }
 });
 
 // ---------------------------------------------------------------- Speech

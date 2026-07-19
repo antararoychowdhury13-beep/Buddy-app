@@ -55,3 +55,58 @@ Write it as a natural, warm, concise briefing a sharp human chief of staff would
   const text = message.content.find((block) => block.type === "text");
   return text && text.type === "text" ? text.text : "";
 }
+
+export interface QuestionContext {
+  deliveredInsights: { domain: string; tier: string; confidence: number; text: string }[];
+  trustScores: { domain: string; accuracy: number; confirmed: number; dismissed: number }[];
+  todaysEvents: { type: string; domain: string; summary: string; at: string }[];
+}
+
+/**
+ * Answers a free-form question (typed or spoken) grounded in the user's real
+ * data — not a replay of the composed briefing. Deliberately conversational
+ * rather than agentic: it can only describe what it's given, it can't take
+ * actions (confirm/dismiss, create events) on the user's behalf.
+ */
+export async function answerQuestion(question: string, context: QuestionContext): Promise<string> {
+  const describeInsights = (list: QuestionContext["deliveredInsights"]) =>
+    list.length > 0
+      ? list.map((i) => `- [${i.domain}, ${i.tier}, confidence ${i.confidence.toFixed(2)}] ${i.text}`).join("\n")
+      : "(none)";
+
+  const describeTrust = (list: QuestionContext["trustScores"]) =>
+    list.length > 0
+      ? list
+          .map((t) => `- ${t.domain}: ${Math.round(t.accuracy * 100)}% accuracy (${t.confirmed} confirmed, ${t.dismissed} dismissed)`)
+          .join("\n")
+      : "(no history yet)";
+
+  const describeEvents = (list: QuestionContext["todaysEvents"]) =>
+    list.length > 0
+      ? list.map((e) => `- [${e.domain}] ${e.summary} (${new Date(e.at).toLocaleString("en-US")})`).join("\n")
+      : "(none)";
+
+  const prompt = `You are Buddy, a thoughtful chief-of-staff assistant, answering a question the user just asked (by voice or text). Ground your answer only in the real data below — never invent meetings, weather, or numbers that aren't listed. If the data doesn't cover what they asked, say so plainly rather than guessing.
+
+Today's delivered insights (already cleared for the user to see):
+${describeInsights(context.deliveredInsights)}
+
+Trust by domain (how reliable Buddy has been so far):
+${describeTrust(context.trustScores)}
+
+Today's raw calendar/weather events:
+${describeEvents(context.todaysEvents)}
+
+The user asked: "${question}"
+
+Reply in 1-4 sentences, plain text, no markdown, no headers — the way a sharp human assistant would answer out loud. You cannot confirm/dismiss insights or create events yourself; if asked to do something actionable, say the user should do it from the app instead of pretending to have done it.`;
+
+  const message = await getClient().messages.create({
+    model: "claude-sonnet-5",
+    max_tokens: 300,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const text = message.content.find((block) => block.type === "text");
+  return text && text.type === "text" ? text.text : "";
+}

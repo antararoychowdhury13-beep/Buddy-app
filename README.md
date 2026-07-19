@@ -58,9 +58,14 @@ npm run build      # compiles src/ to dist/
 
 ## Voice (Kokoro)
 
-The briefing page has a "Listen" button that synthesizes the displayed
-briefing to speech and plays it back — manual playback only, no autoplay,
-no microphone.
+Every page with a "Listen" button synthesizes that text to speech and plays
+it back — manual playback only, triggered by a click, never autoplay.
+
+The `/voice` screen additionally takes microphone input: tap the orb, ask a
+question out loud, and Buddy answers using the browser's built-in
+`SpeechRecognition` API (Chrome/Edge; gracefully disabled with a message in
+browsers that don't support it) — see **Ask Buddy** below for how the
+answer itself is generated.
 
 **Architecture:** the rest of Buddy never knows which TTS engine is in use.
 Everything goes through one interface:
@@ -86,6 +91,16 @@ offline and reuses the in-memory model, so it's much faster.
 
 **Voice/language:** English only, voice `af_heart`, for v1.
 
+## Ask Buddy
+
+`POST /ask` with `{ "question": "..." }` returns `{ "answer": "..." }`. It's
+used by both `/chats` (typed) and `/voice` (spoken) — one real Claude call
+(`answerQuestion` in `src/reasoning.ts`) grounded in the user's actual data:
+today's delivered insights, per-domain trust scores, and raw calendar/weather
+events. It won't invent meetings or numbers that aren't in that context, and
+it can't take actions (confirm/dismiss, create events) on the user's behalf —
+it'll say so and point back to the app instead of pretending to have done it.
+
 ## Web app
 
 A full mobile-style app UI, server-rendered (no build step, no client
@@ -98,8 +113,8 @@ framework — plain Express routes + a shared shell in `src/webapp/`):
 | `/my-day` | Chronological timeline built from real calendar/weather `event` rows |
 | `/me` | Real per-domain trust bars, real connected accounts |
 | `/notifications` | Real feed from the `feedback` table + newly delivered insights |
-| `/voice` | Full-screen "Talk to Buddy" — plays the real briefing aloud (TTS only, no mic) |
-| `/chats` | Ask a question; Buddy's reply is the real latest composed briefing |
+| `/voice` | Full-screen "Talk to Buddy" — tap the orb, ask by voice, get a real spoken answer |
+| `/chats` | Ask a question by typing; same real Q&A as `/voice` |
 | `/how-it-works` | Static explanation of the tiering mechanism |
 
 `src/webapp/design.ts` holds the design tokens/CSS/icon sprite, `shell.ts`
