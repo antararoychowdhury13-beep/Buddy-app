@@ -541,6 +541,7 @@ app.get("/voice", async (_req, res) => {
         ${text ? escapeHtml(text) : "No briefing yet — run <code>npm run ingest</code>."}
       </div>
       <div id="voice-transcript" hidden style="max-width:300px; font-size:13.5px; line-height:1.55; text-align:left; display:flex; flex-direction:column; gap:8px;"></div>
+      <div id="voice-error" hidden style="max-width:280px; font-size:12px; line-height:1.5; color:var(--crit); background:var(--crit-dim); border-radius:var(--r-md); padding:10px 12px;"></div>
       ${
         text
           ? `<button class="btn btn-ghost btn-sm listen-btn" type="button" data-text="${escapeHtml(text)}" style="margin-top:6px;">${icon("wave", "i i-sm")}Play today's briefing</button>`
@@ -616,6 +617,25 @@ app.get("/voice", async (_req, res) => {
         });
     }
 
+    var errorBox = document.getElementById("voice-error");
+    function showError(html) {
+      if (!errorBox) return;
+      errorBox.innerHTML = html;
+      errorBox.hidden = false;
+    }
+    function clearError() {
+      if (!errorBox) return;
+      errorBox.hidden = true;
+      errorBox.innerHTML = "";
+    }
+
+    var ERROR_MESSAGES = {
+      network: "Couldn't reach the speech recognition service. If you're on Brave, Arc, or have an ad-blocker/VPN active, try disabling it for this site, or switch to plain Chrome.",
+      "not-allowed": "Microphone access is blocked for this site. Allow it in your browser's site settings, then reload.",
+      "service-not-allowed": "Microphone access is blocked for this site. Allow it in your browser's site settings, then reload.",
+      "audio-capture": "No microphone was found. Check that one is connected and not in use by another app.",
+    };
+
     var SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognitionCtor) {
       var recognition = new SpeechRecognitionCtor();
@@ -623,15 +643,28 @@ app.get("/voice", async (_req, res) => {
       recognition.interimResults = false;
       recognition.maxAlternatives = 1;
       var listening = false;
+      var retriedNetworkError = false;
 
-      recognition.addEventListener("start", function () { listening = true; setState("Listening…"); });
+      recognition.addEventListener("start", function () { listening = true; clearError(); setState("Listening…"); });
       recognition.addEventListener("end", function () { listening = false; });
+      recognition.addEventListener("result", function () { retriedNetworkError = false; });
       recognition.addEventListener("error", function (e) {
         listening = false;
         setState("Tap to ask");
-        if (e.error !== "aborted" && e.error !== "no-speech") {
-          alert("Microphone error: " + e.error + ". Check your browser's microphone permission for this site.");
+
+        if (e.error === "aborted" || e.error === "no-speech") return;
+
+        // Transient network hiccups are common with this API; retry once
+        // silently before bothering the user with a message.
+        if (e.error === "network" && !retriedNetworkError) {
+          retriedNetworkError = true;
+          setTimeout(function () {
+            try { recognition.start(); } catch (err) { console.error(err); }
+          }, 400);
+          return;
         }
+
+        showError(ERROR_MESSAGES[e.error] || ("Microphone error: " + e.error + "."));
       });
       recognition.addEventListener("result", function (e) {
         askAndSpeak(e.results[0][0].transcript);
@@ -639,6 +672,8 @@ app.get("/voice", async (_req, res) => {
 
       orb.addEventListener("click", function () {
         if (listening) { recognition.stop(); return; }
+        clearError();
+        retriedNetworkError = false;
         try { recognition.start(); } catch (err) { console.error(err); }
       });
       orb.addEventListener("keydown", function (e) {
