@@ -30,18 +30,6 @@ export function formatClockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-export function startOfToday(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-export function endOfToday(): Date {
-  const d = new Date();
-  d.setHours(23, 59, 59, 999);
-  return d;
-}
-
 /** Restricts a user-supplied redirect target to an internal relative path, preventing open-redirect. */
 export function safeInternalPath(path: unknown, fallback = "/"): string {
   if (typeof path === "string" && path.startsWith("/") && !path.startsWith("//")) {

@@ -9,11 +9,9 @@ import { escapeHtml, icon } from "./webapp/design.js";
 import { renderShell } from "./webapp/shell.js";
 import {
   DOMAIN_META,
-  endOfToday,
   formatClockTime,
   relativeTime,
   safeInternalPath,
-  startOfToday,
   tierPillHtml,
 } from "./webapp/helpers.js";
 
@@ -61,7 +59,7 @@ function nudgeCardHtml(i: Insight, opts: { showDetailsLink?: boolean } = {}): st
 app.get("/", async (_req, res) => {
   const user = await getOrCreateSingleUser(requireEmail());
 
-  const [{ data: briefing }, { data: insightRows }, { data: trustScores }, { data: connectors }, { data: calendarEventsToday }] =
+  const [{ data: briefing }, { data: insightRows }, { data: trustScores }, { data: connectors }, { data: recentCalendarEvents }] =
     await Promise.all([
       db.from("briefing").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       db.from("insight").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20),
@@ -69,17 +67,27 @@ app.get("/", async (_req, res) => {
       db.from("connector").select("*").eq("user_id", user.id),
       db
         .from("event")
-        .select("raw")
+        .select("raw, created_at")
         .eq("user_id", user.id)
         .eq("type", "calendar_event")
-        .gte("occurred_at", startOfToday().toISOString())
-        .lte("occurred_at", endOfToday().toISOString()),
+        .order("created_at", { ascending: false })
+        .limit(20),
     ]);
 
-  // Ingest can run repeatedly, inserting the same 3 mock meetings again each
-  // time; dedupe by the connector's stable event id for an honest count.
+  // Only count events from the most recent ingest run. A briefing row is
+  // always written every run (even when the calendar connector returns zero
+  // events), so anchor to it rather than to the calendar rows themselves —
+  // otherwise a real, empty calendar run would fall back to whatever older
+  // batch of (now-stale) rows happens to be most recent.
+  const runAnchor = briefing ? new Date(briefing.created_at).getTime() : null;
   const meetingsToday = new Set(
-    (calendarEventsToday ?? []).map((row) => (row.raw as Record<string, unknown>).id as string)
+    (recentCalendarEvents ?? [])
+      .filter((row) => {
+        if (runAnchor === null) return false;
+        const age = runAnchor - new Date(row.created_at).getTime();
+        return age >= 0 && age < 60_000;
+      })
+      .map((row) => (row.raw as Record<string, unknown>).id as string)
   ).size;
 
   // All rows from one ingest run share the same created_at timestamp (one
