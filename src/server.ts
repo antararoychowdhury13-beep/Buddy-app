@@ -639,6 +639,7 @@ app.get("/voice", async (_req, res) => {
     var mediaSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
     if (mediaSupported) {
+      var MAX_RECORDING_SECONDS = 20; // keeps each question snappy to transcribe locally
       var recording = false;
       var audioCtx = null;
       var stream = null;
@@ -646,6 +647,15 @@ app.get("/voice", async (_req, res) => {
       var processorNode = null;
       var gainNode = null;
       var chunks = [];
+      var countdownIntervalId = null;
+      var secondsLeft = 0;
+
+      function clearCountdown() {
+        if (countdownIntervalId) {
+          clearInterval(countdownIntervalId);
+          countdownIntervalId = null;
+        }
+      }
 
       function startRecording() {
         clearError();
@@ -666,7 +676,17 @@ app.get("/voice", async (_req, res) => {
             processorNode.connect(gainNode);
             gainNode.connect(audioCtx.destination);
             recording = true;
-            setState("Listening… tap to stop");
+
+            secondsLeft = MAX_RECORDING_SECONDS;
+            setState("Listening… " + secondsLeft + "s (tap to stop)");
+            countdownIntervalId = setInterval(function () {
+              secondsLeft -= 1;
+              if (secondsLeft <= 0) {
+                stopRecordingAndTranscribe();
+                return;
+              }
+              setState("Listening… " + secondsLeft + "s (tap to stop)");
+            }, 1000);
           })
           .catch(function (err) {
             console.error(err);
@@ -677,6 +697,7 @@ app.get("/voice", async (_req, res) => {
       function stopRecordingAndTranscribe() {
         if (!recording) return;
         recording = false;
+        clearCountdown();
         var nativeRate = audioCtx.sampleRate;
         processorNode.disconnect();
         sourceNode.disconnect();

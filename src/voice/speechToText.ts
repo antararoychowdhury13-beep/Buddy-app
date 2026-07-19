@@ -24,7 +24,11 @@ function getTranscriber() {
 /** `samples` must already be mono Float32 PCM at REQUIRED_SAMPLE_RATE (16kHz). */
 export async function transcribeAudio(samples: Float32Array): Promise<string> {
   const transcriber = await getTranscriber();
-  const output = await transcriber(samples);
+  // Whisper only reliably attends to ~30s per pass; without chunking, audio
+  // longer than that silently gets truncated (or runs very slowly) instead
+  // of properly transcribed end to end. chunk_length_s splits long audio
+  // into overlapping windows (stride_length_s) and stitches the result.
+  const output = await transcriber(samples, { chunk_length_s: 30, stride_length_s: 5 });
   const result = Array.isArray(output) ? output[0] : output;
   return (result?.text ?? "").trim();
 }
