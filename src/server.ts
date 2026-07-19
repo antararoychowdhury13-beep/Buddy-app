@@ -61,7 +61,7 @@ async function gatherQuestionContext(userId: string): Promise<QuestionContext> {
     return { type: e.type as string, domain: e.domain as string, summary, at: e.occurred_at as string };
   });
 
-  return { deliveredInsights, trustScores, todaysEvents };
+  return { now: new Date().toISOString(), deliveredInsights, trustScores, todaysEvents };
 }
 
 function nudgeCardHtml(i: Insight, opts: { showDetailsLink?: boolean } = {}): string {

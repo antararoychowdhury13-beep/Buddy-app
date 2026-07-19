@@ -57,16 +57,23 @@ Write it as a natural, warm, concise briefing a sharp human chief of staff would
 }
 
 export interface QuestionContext {
+  now: string; // ISO timestamp — Claude has no innate sense of the current time, so this must be supplied
   deliveredInsights: { domain: string; tier: string; confidence: number; text: string }[];
   trustScores: { domain: string; accuracy: number; confirmed: number; dismissed: number }[];
   todaysEvents: { type: string; domain: string; summary: string; at: string }[];
 }
 
 /**
- * Answers a free-form question (typed or spoken) grounded in the user's real
- * data — not a replay of the composed briefing. Deliberately conversational
- * rather than agentic: it can only describe what it's given, it can't take
- * actions (confirm/dismiss, create events) on the user's behalf.
+ * Answers a free-form question (typed or spoken). Two different kinds of
+ * question get two different treatments:
+ *  - Anything about the user's own day (meetings, weather, trust, nudges)
+ *    must be grounded ONLY in the real data below — never invented.
+ *  - Anything else (the time, general knowledge, definitions, quick
+ *    calculations) Buddy answers normally, like any capable assistant would
+ *    — refusing those just because they're not in the app's data would be
+ *    unhelpfully narrow, not careful.
+ * Deliberately conversational rather than agentic either way: it can
+ * describe, not act — no confirm/dismiss/create on the user's behalf.
  */
 export async function answerQuestion(question: string, context: QuestionContext): Promise<string> {
   const describeInsights = (list: QuestionContext["deliveredInsights"]) =>
@@ -86,7 +93,9 @@ export async function answerQuestion(question: string, context: QuestionContext)
       ? list.map((e) => `- [${e.domain}] ${e.summary} (${new Date(e.at).toLocaleString("en-US")})`).join("\n")
       : "(none)";
 
-  const prompt = `You are Buddy, a thoughtful chief-of-staff assistant, answering a question the user just asked (by voice or text). Ground your answer only in the real data below — never invent meetings, weather, or numbers that aren't listed. If the data doesn't cover what they asked, say so plainly rather than guessing.
+  const prompt = `You are Buddy, a thoughtful chief-of-staff assistant, answering a question the user just asked (by voice or text).
+
+Right now it is: ${new Date(context.now).toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" })}
 
 Today's delivered insights (already cleared for the user to see):
 ${describeInsights(context.deliveredInsights)}
@@ -99,7 +108,13 @@ ${describeEvents(context.todaysEvents)}
 
 The user asked: "${question}"
 
-Reply in 1-4 sentences, plain text, no markdown, no headers — the way a sharp human assistant would answer out loud. You cannot confirm/dismiss insights or create events yourself; if asked to do something actionable, say the user should do it from the app instead of pretending to have done it.`;
+How to answer:
+- If it's about their own day — meetings, weather, trust scores, nudges — ground it ONLY in the data above. Never invent a meeting, forecast, or number that isn't listed; if the data doesn't cover it, say so plainly.
+- If it's general (the time, a fact, a definition, quick math, anything not about their personal data) — just answer it directly and helpfully, the way any competent assistant would. Don't refuse or deflect just because it's not in the data above — use the current time given above for anything time/date-related.
+- If the question itself is empty, garbled, or you genuinely can't tell what was asked, say so briefly and ask them to repeat it — don't pivot to volunteering unrelated information instead.
+- You cannot confirm/dismiss insights or create events yourself; if asked to do something actionable, say the user should do it from the app rather than pretending to have done it.
+
+Reply in 1-4 sentences, plain text, no markdown, no headers — the way a sharp human assistant would answer out loud.`;
 
   const message = await getClient().messages.create({
     model: "claude-sonnet-5",
