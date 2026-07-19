@@ -11,6 +11,7 @@ import { connectRouter, startGoogleOAuthCallbackServer } from "./webapp/connect.
 import {
   DOMAIN_META,
   formatClockTime,
+  PLANNED_INTEGRATIONS,
   relativeTime,
   safeInternalPath,
   tierPillHtml,
@@ -330,6 +331,15 @@ app.get("/me", async (req, res) => {
 
     <div class="section-head"><h2>Connected accounts</h2></div>
     ${connectorHtml}
+
+    <div class="section-head"><h2>More integrations</h2><span style="font-size:11px; color:var(--faint);">Coming soon</span></div>
+    <div class="card">
+      ${PLANNED_INTEGRATIONS.map(
+        (group) => `
+        <div class="planned-category">${escapeHtml(group.category)}</div>
+        <div class="planned-chips">${group.apps.map((app) => `<span class="planned-chip">${escapeHtml(app)}</span>`).join("")}</div>`
+      ).join("")}
+    </div>
 
     <div class="section-head"><h2>How Buddy is learning</h2></div>
     <div class="card">${trustHtml || `<div style="color:var(--faint); font-size:12.5px;">No trust history yet.</div>`}</div>

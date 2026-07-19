@@ -171,6 +171,11 @@ button { font-family: inherit; }
 .card { background: var(--layer-01); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px; }
 .list-row { display: flex; align-items: center; gap: 10px; background: var(--layer-01); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; margin-bottom: 6px; }
 
+.planned-category { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); margin: 16px 0 8px; }
+.planned-category:first-child { margin-top: 0; }
+.planned-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.planned-chip { font-size: 11.5px; color: var(--faint); background: var(--layer-01); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 5px 10px; }
+
 .trust-row + .trust-row { margin-top: 12px; }
 .trust-row .top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
 .trust-row .bar-track { height: 6px; border-radius: 3px; background: var(--line); }

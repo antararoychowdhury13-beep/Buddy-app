@@ -37,3 +37,21 @@ export function safeInternalPath(path: unknown, fallback = "/"): string {
   }
   return fallback;
 }
+
+/**
+ * Roadmap directory shown on the Me page under "More integrations" — none of
+ * these are wired up (only Calendar/Weather are real), shown honestly as
+ * "Coming soon" rather than implying they work.
+ */
+export const PLANNED_INTEGRATIONS: { category: string; apps: string[] }[] = [
+  { category: "Work & Productivity", apps: ["Outlook Calendar", "Slack", "Microsoft Teams", "Zoom", "Notion", "Asana", "Trello", "Jira", "Monday.com"] },
+  { category: "Email & Messaging", apps: ["Gmail", "Outlook Mail", "WhatsApp", "Telegram", "Signal", "iMessage", "Discord", "Google Meet", "Webex", "Skype"] },
+  { category: "Commute & Maps", apps: ["Google Maps", "Apple Maps", "Waze", "Uber", "Ola", "Rapido", "IRCTC", "Citymapper", "Moovit", "MapmyIndia"] },
+  { category: "Finance & Banking", apps: ["Google Pay", "PhonePe", "Paytm", "HDFC Bank", "ICICI Bank", "SBI YONO", "Zerodha Kite", "Groww", "CRED", "Splitwise"] },
+  { category: "Health & Fitness", apps: ["Apple Health", "Google Fit", "Fitbit", "Strava", "MyFitnessPal", "Practo", "Tata 1mg", "Cult.fit", "Headspace", "Calm"] },
+  { category: "Family & Home", apps: ["Life360", "Google Family Link", "FamilyWall", "Cozi", "Amazon Alexa", "Google Home", "Ring", "Nest", "myGate", "NoBroker"] },
+  { category: "Shopping & Food", apps: ["Amazon", "Flipkart", "Swiggy", "Zomato", "BigBasket", "Blinkit", "Myntra", "Ajio", "Instacart", "DoorDash"] },
+  { category: "Entertainment & Media", apps: ["Spotify", "YouTube Music", "Netflix", "Prime Video", "Disney+ Hotstar", "JioCinema", "Audible", "Kindle", "Goodreads", "Pocket"] },
+  { category: "Travel", apps: ["MakeMyTrip", "Booking.com", "Airbnb", "Skyscanner", "Google Flights", "TripIt", "ClearTrip", "Yatra", "ixigo", "Expedia"] },
+  { category: "Career & Learning", apps: ["LinkedIn", "Coursera", "Udemy", "Duolingo", "GitHub", "Stack Overflow", "Glassdoor", "Naukri.com", "Google Scholar", "Medium"] },
+];
