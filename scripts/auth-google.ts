@@ -1,50 +1,30 @@
 import "dotenv/config";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { google } from "googleapis";
 import http from "node:http";
+import { db, getOrCreateSingleUser } from "../src/db.js";
+import { createOAuthClient, GOOGLE_CALENDAR_SCOPES } from "../src/connectors/googleOAuth.js";
 
 /**
- * One-time interactive OAuth flow for Google Calendar (installed-app / desktop
- * flow). Run with `npm run auth:google`. Opens a consent screen in your
- * browser, catches the redirect on a local port, exchanges the code for a
- * refresh token, and writes it into .env as GOOGLE_REFRESH_TOKEN.
+ * CLI fallback for the one-time Google Calendar OAuth consent flow —
+ * the primary path is now the in-app Connect button on the Me page
+ * (GET /connect/google), which does the same exchange without leaving
+ * the browser. Run this only if you'd rather do it from the terminal.
+ * Saves the refresh token onto the `connector` row in Postgres, same
+ * place the in-app flow writes it.
  */
 
 const REDIRECT_PORT = 3939;
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/oauth2callback`;
-const SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
-const ENV_PATH = path.resolve(process.cwd(), ".env");
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(
-      `${name} is not set. Create an OAuth client (Desktop app) in Google Cloud Console and add its Client ID/Secret to .env first.`
-    );
-  }
-  return value;
-}
-
-function writeRefreshTokenToEnv(token: string) {
-  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, "utf8") : "";
-  if (/^GOOGLE_REFRESH_TOKEN=.*$/m.test(content)) {
-    content = content.replace(/^GOOGLE_REFRESH_TOKEN=.*$/m, `GOOGLE_REFRESH_TOKEN=${token}`);
-  } else {
-    content += `${content.endsWith("\n") || content === "" ? "" : "\n"}GOOGLE_REFRESH_TOKEN=${token}\n`;
-  }
-  fs.writeFileSync(ENV_PATH, content);
-}
 
 async function main() {
-  const clientId = requireEnv("GOOGLE_CLIENT_ID");
-  const clientSecret = requireEnv("GOOGLE_CLIENT_SECRET");
+  const email = process.env.BUDDY_USER_EMAIL;
+  if (!email) throw new Error("BUDDY_USER_EMAIL must be set in .env");
+  const user = await getOrCreateSingleUser(email);
 
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, REDIRECT_URI);
+  const oauth2Client = createOAuthClient(REDIRECT_URI);
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent", // force a refresh_token even if this account has authorized before
-    scope: SCOPES,
+    scope: GOOGLE_CALENDAR_SCOPES,
   });
 
   console.log("\nOpen this URL in your browser and approve access:\n");
@@ -82,8 +62,15 @@ async function main() {
     );
   }
 
-  writeRefreshTokenToEnv(tokens.refresh_token);
-  console.log("\nSaved GOOGLE_REFRESH_TOKEN to .env. You're ready to run `npm run ingest`.");
+  const { error } = await db
+    .from("connector")
+    .upsert(
+      { user_id: user.id, type: "google_calendar", status: "connected", refresh_token: tokens.refresh_token },
+      { onConflict: "user_id,type" }
+    );
+  if (error) throw error;
+
+  console.log("\nSaved the refresh token to the connector table. You're ready to run `npm run ingest`.");
 }
 
 main().catch((err) => {

@@ -1,11 +1,12 @@
 import { google } from "googleapis";
 import type { EventRecord } from "../types.js";
+import { createOAuthClient } from "./googleOAuth.js";
 
 /**
- * Google Calendar connector (read-only, single user). Requires GOOGLE_CLIENT_ID,
- * GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN in .env — run
- * `npm run auth:google` once to obtain the refresh token via the one-time
- * OAuth consent flow.
+ * Google Calendar connector (read-only, single user). Takes the refresh
+ * token as a parameter — it's per-connection data that lives in the
+ * `connector` table, managed via the in-app Connect/Disconnect flow (or
+ * `npm run auth:google` as a CLI fallback), not a static .env value.
  */
 export interface RawCalendarEvent {
   id: string;
@@ -14,24 +15,9 @@ export interface RawCalendarEvent {
   end: string; // ISO datetime
 }
 
-function getOAuthClient() {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error(
-      "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN must be set in .env. Run `npm run auth:google` after creating an OAuth client in Google Cloud Console."
-    );
-  }
-
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
-  oauth2Client.setCredentials({ refresh_token: refreshToken });
-  return oauth2Client;
-}
-
-export async function fetchCalendarEvents(): Promise<RawCalendarEvent[]> {
-  const auth = getOAuthClient();
+export async function fetchCalendarEvents(refreshToken: string): Promise<RawCalendarEvent[]> {
+  const auth = createOAuthClient();
+  auth.setCredentials({ refresh_token: refreshToken });
   const calendar = google.calendar({ version: "v3", auth });
 
   const startOfDay = new Date();

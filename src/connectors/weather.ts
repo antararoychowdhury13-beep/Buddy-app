@@ -40,11 +40,9 @@ function findFirstInRange(
   });
 }
 
-export async function fetchWeatherForecast(): Promise<RawWeatherForecast[]> {
-  const apiKey = process.env.OPENWEATHER_API_KEY;
-  const location = process.env.WEATHER_LOCATION ?? "Bengaluru,IN";
+export async function fetchWeatherForecast(apiKey: string, location: string): Promise<RawWeatherForecast[]> {
   if (!apiKey) {
-    throw new Error("OPENWEATHER_API_KEY is not set. Add it to .env before running the weather connector.");
+    throw new Error("A weather API key is required — connect the Weather source from the Me page first.");
   }
 
   const url = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(location)}&appid=${apiKey}&units=metric`;

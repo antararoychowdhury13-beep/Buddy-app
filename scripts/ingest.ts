@@ -29,14 +29,79 @@ function findBackToBackMeetings(calendarEvents: EventRecord[]): [EventRecord, Ev
   return null;
 }
 
-async function upsertConnector(userId: string, type: "google_calendar" | "weather") {
-  const { data, error } = await db
+async function getOrCreateConnector(userId: string, type: "google_calendar" | "weather") {
+  const { data: existing, error } = await db
     .from("connector")
-    .upsert({ user_id: userId, type, status: "connected" }, { onConflict: "user_id,type" })
+    .select("*")
+    .eq("user_id", userId)
+    .eq("type", type)
+    .maybeSingle();
+  if (error) throw error;
+  if (existing) return existing;
+
+  const { data: created, error: createErr } = await db
+    .from("connector")
+    .insert({ user_id: userId, type, status: "disconnected" })
     .select("*")
     .single();
-  if (error) throw error;
-  return data;
+  if (createErr) throw createErr;
+  return created;
+}
+
+/**
+ * Credentials now live on the connector row (managed via the in-app Connect
+ * flow on the Me page), not static .env values. This migrates an existing
+ * .env-based setup into the database once, so it keeps working after the
+ * upgrade without requiring a re-connect.
+ */
+async function getGoogleRefreshToken(userId: string): Promise<{ connectorId: string; refreshToken: string }> {
+  const connector = await getOrCreateConnector(userId, "google_calendar");
+  if (connector.refresh_token) {
+    return { connectorId: connector.id, refreshToken: connector.refresh_token };
+  }
+
+  const envToken = process.env.GOOGLE_REFRESH_TOKEN;
+  if (envToken) {
+    const { data, error } = await db
+      .from("connector")
+      .update({ refresh_token: envToken, status: "connected" })
+      .eq("id", connector.id)
+      .select("*")
+      .single();
+    if (error) throw error;
+    console.log("(migrated GOOGLE_REFRESH_TOKEN from .env into the connector table)");
+    return { connectorId: data.id, refreshToken: envToken };
+  }
+
+  throw new Error(
+    "Google Calendar isn't connected yet. Connect it from the Me page in the app (or run `npm run auth:google`)."
+  );
+}
+
+async function getWeatherCredentials(
+  userId: string
+): Promise<{ connectorId: string; apiKey: string; location: string }> {
+  const connector = await getOrCreateConnector(userId, "weather");
+  const metadata = (connector.metadata ?? {}) as { apiKey?: string; location?: string };
+  if (metadata.apiKey) {
+    return { connectorId: connector.id, apiKey: metadata.apiKey, location: metadata.location ?? "Bengaluru,IN" };
+  }
+
+  const envKey = process.env.OPENWEATHER_API_KEY;
+  if (envKey) {
+    const migrated = { apiKey: envKey, location: process.env.WEATHER_LOCATION ?? "Bengaluru,IN" };
+    const { data, error } = await db
+      .from("connector")
+      .update({ metadata: migrated, status: "connected" })
+      .eq("id", connector.id)
+      .select("*")
+      .single();
+    if (error) throw error;
+    console.log("(migrated OPENWEATHER_API_KEY from .env into the connector table)");
+    return { connectorId: data.id, apiKey: migrated.apiKey, location: migrated.location };
+  }
+
+  throw new Error("Weather isn't connected yet. Connect it from the Me page in the app.");
 }
 
 async function insertEvents(rows: Omit<EventRecord, "id">[]): Promise<EventRecord[]> {
@@ -176,17 +241,17 @@ async function main() {
   const user = await getOrCreateSingleUser(email);
   console.log(`User: ${user.email} (${user.id})`);
 
-  const calendarConnector = await upsertConnector(user.id, "google_calendar");
-  const weatherConnector = await upsertConnector(user.id, "weather");
+  const { connectorId: calendarConnectorId, refreshToken } = await getGoogleRefreshToken(user.id);
+  const { connectorId: weatherConnectorId, apiKey, location } = await getWeatherCredentials(user.id);
 
-  const rawCalendar = await fetchCalendarEvents();
-  const rawWeather = await fetchWeatherForecast();
+  const rawCalendar = await fetchCalendarEvents(refreshToken);
+  const rawWeather = await fetchWeatherForecast(apiKey, location);
 
   const calendarEvents = await insertEvents(
-    normalizeCalendarEvents(user.id, calendarConnector.id, rawCalendar)
+    normalizeCalendarEvents(user.id, calendarConnectorId, rawCalendar)
   );
   const weatherEvents = await insertEvents(
-    normalizeWeatherForecast(user.id, weatherConnector.id, rawWeather)
+    normalizeWeatherForecast(user.id, weatherConnectorId, rawWeather)
   );
   console.log(`Stored ${calendarEvents.length} calendar events, ${weatherEvents.length} weather events.`);
 
