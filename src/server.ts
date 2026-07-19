@@ -600,6 +600,7 @@ app.get("/voice", async (_req, res) => {
   const headerHtml = `<div class="spacer"></div><a href="/" class="icon-btn" aria-label="Close">${icon("x")}</a>`;
 
   const text = briefing?.composed_text ?? "";
+  const displayName = user.display_name ?? user.email.split("@")[0];
 
   const bodyHtml = `
     <div class="voice-stage">
@@ -626,21 +627,42 @@ app.get("/voice", async (_req, res) => {
           : ""
       }
       <div style="font-size:10.5px; color:var(--faint); max-width:240px;">Tap the orb and ask a question out loud — Buddy answers from your real data.</div>
+
+      <button class="btn btn-ghost btn-sm" type="button" id="wake-toggle" style="margin-top:10px;">${icon("mic", "i i-sm")}Enable "Buddy" wake word</button>
+      <div style="font-size:10px; color:var(--faint); max-width:260px;" id="wake-note">Off by default. When on, this tab keeps the mic listening locally in short cycles for the word "Buddy" — nothing leaves your machine except the actual question, once triggered.</div>
     </div>
   `;
 
   const extraScript = `
   (function () {
+    var USER_NAME = ${JSON.stringify(displayName)};
     var orb = document.getElementById("voice-orb");
     var state = document.getElementById("voice-state");
     var audioEl = document.getElementById("app-audio");
     var transcriptBox = document.getElementById("voice-transcript");
     var defaultText = document.getElementById("voice-default-text");
+    var wakeToggleBtn = document.getElementById("wake-toggle");
     if (!orb || !audioEl) return;
 
+    var wakeEnabled = false;
+    var wakeBusy = false;
+    var awaitingWakeCompletion = false;
+
     audioEl.addEventListener("play", function () { orb.style.transform = "scale(1.06)"; setState("Speaking…"); });
-    audioEl.addEventListener("pause", function () { orb.style.transform = "scale(1)"; setState("Tap to ask"); });
-    audioEl.addEventListener("ended", function () { orb.style.transform = "scale(1)"; setState("Tap to ask"); });
+    audioEl.addEventListener("pause", function () { orb.style.transform = "scale(1)"; if (!wakeBusy) setState(idleLabel()); });
+    audioEl.addEventListener("ended", function () {
+      orb.style.transform = "scale(1)";
+      if (awaitingWakeCompletion) {
+        awaitingWakeCompletion = false;
+        wakeBusy = false;
+      }
+      if (!wakeBusy) setState(idleLabel());
+      if (wakeEnabled && !wakeBusy && !recording) setTimeout(wakeCycle, 700);
+    });
+
+    function idleLabel() {
+      return wakeEnabled ? "Say \\"Buddy\\"…" : "Tap to ask";
+    }
 
     function setState(text) { if (state) state.textContent = text; }
     function escapeForDisplay(s) {
@@ -690,8 +712,10 @@ app.get("/voice", async (_req, res) => {
         })
         .catch(function (err) {
           console.error(err);
-          setState("Tap to ask");
-          alert("Could not get an answer — please try again.");
+          setState(idleLabel());
+          showError("Could not get an answer — please try again.");
+          if (awaitingWakeCompletion) { awaitingWakeCompletion = false; wakeBusy = false; }
+          if (wakeEnabled && !recording) setTimeout(wakeCycle, 800);
         });
     }
 
@@ -819,20 +843,25 @@ app.get("/voice", async (_req, res) => {
           .then(function (data) {
             var transcript = (data.transcript || "").trim();
             if (!transcript) {
-              setState("Tap to ask");
+              setState(idleLabel());
               showError("Didn't catch that — try again and speak clearly.");
+              if (awaitingWakeCompletion) { awaitingWakeCompletion = false; wakeBusy = false; }
+              if (wakeEnabled) setTimeout(wakeCycle, 800);
               return;
             }
             askAndSpeak(transcript);
           })
           .catch(function (err) {
             console.error(err);
-            setState("Tap to ask");
+            setState(idleLabel());
             showError("Couldn't transcribe that. Please try again.");
+            if (awaitingWakeCompletion) { awaitingWakeCompletion = false; wakeBusy = false; }
+            if (wakeEnabled) setTimeout(wakeCycle, 800);
           });
       }
 
       orb.addEventListener("click", function () {
+        if (wakeCycleActive || wakeBusy) return; // brief wake-sampling window or already mid-conversation
         if (recording) { stopRecordingAndTranscribe(); return; }
         startRecording();
       });
@@ -842,11 +871,155 @@ app.get("/voice", async (_req, res) => {
           orb.click();
         }
       });
+
+      // ---- Wake word ("say 'Buddy'") — opt-in, off by default ----
+      var wakeCycleActive = false;
+
+      function recordShortClip(durationMs) {
+        return new Promise(function (resolve, reject) {
+          navigator.mediaDevices
+            .getUserMedia({ audio: true })
+            .then(function (s) {
+              var ctx = new (window.AudioContext || window.webkitAudioContext)();
+              var source = ctx.createMediaStreamSource(s);
+              var processor = ctx.createScriptProcessor(4096, 1, 1);
+              var gain = ctx.createGain();
+              gain.gain.value = 0;
+              var clipChunks = [];
+              processor.onaudioprocess = function (e) {
+                clipChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+              };
+              source.connect(processor);
+              processor.connect(gain);
+              gain.connect(ctx.destination);
+
+              setTimeout(function () {
+                processor.disconnect();
+                source.disconnect();
+                gain.disconnect();
+                s.getTracks().forEach(function (t) { t.stop(); });
+                var nativeRate = ctx.sampleRate;
+                var totalLength = clipChunks.reduce(function (sum, c) { return sum + c.length; }, 0);
+                var merged = new Float32Array(totalLength);
+                var off = 0;
+                clipChunks.forEach(function (c) { merged.set(c, off); off += c.length; });
+                ctx.close();
+
+                var OfflineCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+                var outLength = Math.max(1, Math.ceil((merged.length * TARGET_SAMPLE_RATE) / nativeRate));
+                var offlineCtx = new OfflineCtor(1, outLength, TARGET_SAMPLE_RATE);
+                var buffer = offlineCtx.createBuffer(1, merged.length, nativeRate);
+                buffer.copyToChannel(merged, 0);
+                var src = offlineCtx.createBufferSource();
+                src.buffer = buffer;
+                src.connect(offlineCtx.destination);
+                src.start();
+                offlineCtx.startRendering().then(function (rendered) {
+                  resolve(rendered.getChannelData(0));
+                }, reject);
+              }, durationMs);
+            })
+            .catch(reject);
+        });
+      }
+
+      function transcribeSamples(samples) {
+        return fetch("/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: samples,
+        })
+          .then(function (res) {
+            if (!res.ok) throw new Error("transcribe failed: " + res.status);
+            return res.json();
+          })
+          .then(function (data) { return (data.transcript || "").trim(); });
+      }
+
+      function playAndWaitForEnd(text) {
+        return speak(text).then(function () {
+          return new Promise(function (resolve) {
+            audioEl.addEventListener("ended", resolve, { once: true });
+          });
+        });
+      }
+
+      var MAX_CONSECUTIVE_WAKE_FAILURES = 3;
+      var consecutiveWakeFailures = 0;
+
+      function disableWakeAfterRepeatedFailure() {
+        wakeEnabled = false;
+        wakeCycleActive = false;
+        if (wakeToggleBtn) {
+          wakeToggleBtn.textContent = "Enable \\"Buddy\\" wake word";
+          wakeToggleBtn.style.borderColor = "";
+          wakeToggleBtn.style.color = "";
+        }
+        showError("Turned off wake word — couldn't access the microphone a few times in a row. Check your browser's mic permission for this site and try enabling it again.");
+        setState(idleLabel());
+      }
+
+      function wakeCycle() {
+        if (!wakeEnabled || wakeBusy || recording) return;
+        wakeCycleActive = true;
+        recordShortClip(3000)
+          .then(function (samples) { return transcribeSamples(samples); })
+          .then(function (transcript) {
+            wakeCycleActive = false;
+            consecutiveWakeFailures = 0;
+            if (/\\bbuddy\\b/i.test(transcript)) {
+              wakeBusy = true;
+              setState("Hi " + USER_NAME + "!");
+              playAndWaitForEnd("Hi " + USER_NAME + ", how can I help you?")
+                .then(function () {
+                  awaitingWakeCompletion = true;
+                  startRecording();
+                })
+                .catch(function (err) {
+                  console.error(err);
+                  wakeBusy = false;
+                  if (wakeEnabled) setTimeout(wakeCycle, 1000);
+                });
+            } else if (wakeEnabled) {
+              setTimeout(wakeCycle, 250);
+            }
+          })
+          .catch(function (err) {
+            wakeCycleActive = false;
+            console.error(err);
+            consecutiveWakeFailures += 1;
+            if (consecutiveWakeFailures >= MAX_CONSECUTIVE_WAKE_FAILURES) {
+              disableWakeAfterRepeatedFailure();
+              return;
+            }
+            if (wakeEnabled) setTimeout(wakeCycle, 1500);
+          });
+      }
+
+      if (wakeToggleBtn) {
+        wakeToggleBtn.addEventListener("click", function () {
+          wakeEnabled = !wakeEnabled;
+          wakeToggleBtn.textContent = wakeEnabled ? "Disable \\"Buddy\\" wake word" : "Enable \\"Buddy\\" wake word";
+          wakeToggleBtn.style.borderColor = wakeEnabled ? "var(--violet)" : "";
+          wakeToggleBtn.style.color = wakeEnabled ? "var(--violet)" : "";
+          if (wakeEnabled) {
+            clearError();
+            if (!recording && !wakeBusy) setState(idleLabel());
+            wakeCycle();
+          } else if (!recording && !wakeBusy) {
+            setState(idleLabel());
+          }
+        });
+      }
     } else {
       setState("No mic in this browser");
       orb.style.cursor = "default";
       orb.setAttribute("aria-disabled", "true");
       orb.removeAttribute("tabindex");
+      if (wakeToggleBtn) {
+        wakeToggleBtn.disabled = true;
+        wakeToggleBtn.textContent = "Wake word needs microphone support";
+      }
     }
   })();`;
 
