@@ -440,7 +440,7 @@ app.get("/voice", async (_req, res) => {
 
   const bodyHtml = `
     <div class="voice-stage">
-      <div class="orb-lg" id="voice-orb">
+      <div class="orb-lg" id="voice-orb" role="button" tabindex="0" aria-label="Play briefing" style="cursor:pointer;">
         <div class="glow orb-glow"></div>
         <div class="ring"></div>
         <div class="core">
@@ -473,6 +473,21 @@ app.get("/voice", async (_req, res) => {
     audioEl.addEventListener("play", function () { orb.style.transform = "scale(1.06)"; if (state) state.textContent = "Speaking…"; });
     audioEl.addEventListener("pause", function () { orb.style.transform = "scale(1)"; if (state) state.textContent = "Ready"; });
     audioEl.addEventListener("ended", function () { orb.style.transform = "scale(1)"; if (state) state.textContent = "Ready"; });
+
+    // Tapping the orb itself plays the briefing too — forward to the real
+    // Listen button rather than duplicating its fetch/disable logic (and to
+    // avoid stomping the orb's own glow/ring/core markup mid-generation).
+    function triggerPlay() {
+      var btn = document.querySelector(".listen-btn");
+      if (btn && !btn.disabled) btn.click();
+    }
+    orb.addEventListener("click", triggerPlay);
+    orb.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        triggerPlay();
+      }
+    });
   })();`;
 
   res.send(renderShell({ title: "Talk to Buddy", activeTab: "voice", showTabbar: false, headerHtml, bodyHtml, extraScript }));
