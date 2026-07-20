@@ -1,0 +1,340 @@
+@use '@carbon/react/scss/spacing' as *;
+@use '@carbon/react/scss/theme' as *;
+@use '@carbon/react/scss/type' as *;
+
+.body {
+  @include type-style('body-01');
+  margin-block: $spacing-03;
+}
+
+.sub {
+  @include type-style('label-01');
+  color: $text-secondary;
+}
+
+.fineprint {
+  @include type-style('label-01');
+  color: $text-secondary;
+  margin-block-start: $spacing-05;
+}
+
+.grow {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.section {
+  margin-block: $spacing-05;
+}
+
+.sectionLabel {
+  @include type-style('heading-compact-01');
+  color: $text-secondary;
+  margin-block-end: $spacing-03;
+}
+
+.actionCol {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-03;
+  margin-block-start: $spacing-05;
+
+  :global(.cds--btn) {
+    inline-size: 100%;
+    max-inline-size: none;
+    justify-content: space-between;
+  }
+}
+
+/* Recording bar */
+.recBar {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+  padding: $spacing-04;
+  background: $layer-01;
+  border-radius: 4px;
+  margin-block-end: $spacing-05;
+}
+
+.recDot {
+  inline-size: 10px;
+  block-size: 10px;
+  border-radius: 50%;
+  background: $support-error;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.timer {
+  @include type-style('code-02');
+  margin-inline-start: auto;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $spacing-03;
+  margin-block: $spacing-04;
+}
+
+/* Processing list */
+.procList {
+  margin-block-start: $spacing-05;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-04;
+}
+
+.procRow {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+  @include type-style('body-01');
+  color: $text-secondary;
+}
+
+.procActive { color: $text-primary; font-weight: 600; }
+.procDone { color: $text-secondary; }
+
+.procDot {
+  inline-size: 16px;
+  block-size: 16px;
+  border-radius: 50%;
+  border: 1.5px solid $border-subtle-01;
+}
+
+.procIcOk { fill: $support-success; }
+.icAmber { fill: $support-warning; }
+
+/* MOM */
+.momMeta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: $spacing-03 $spacing-05;
+  padding: $spacing-04 0;
+  margin-block: $spacing-04;
+  border-block: 1px solid $border-subtle-01;
+}
+
+.momSection {
+  margin-block: $spacing-05;
+  padding-block-end: $spacing-04;
+  border-block-end: 1px solid $border-subtle-01;
+}
+
+.momSecHead {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+  margin-block-end: $spacing-03;
+
+  h4 { @include type-style('heading-compact-01'); }
+}
+
+.decisionRow {
+  display: flex;
+  gap: $spacing-03;
+  align-items: flex-start;
+  margin-block: $spacing-03;
+  @include type-style('body-01');
+}
+
+.conflictNote {
+  display: flex;
+  align-items: center;
+  gap: $spacing-04;
+  flex-wrap: wrap;
+  margin-block-start: $spacing-02;
+  @include type-style('label-01');
+  color: $support-warning;
+}
+
+/* Fields */
+.section :global(.ask-field),
+.momMeta :global(.ask-field),
+:global(.ask-field) {
+  display: flex;
+  justify-content: space-between;
+  gap: $spacing-05;
+  padding-block: $spacing-02;
+  @include type-style('body-01');
+}
+
+:global(.ask-field__k) { color: $text-secondary; }
+:global(.ask-field__v) { text-align: end; }
+
+/* Plan steps */
+.assumptionRow {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+  padding-block: $spacing-03;
+  @include type-style('body-01');
+}
+
+.editBox {
+  display: flex;
+  align-items: flex-end;
+  gap: $spacing-03;
+  margin-block: $spacing-04;
+}
+
+.planStep {
+  border: 1px solid $border-subtle-01;
+  border-radius: 6px;
+  padding: $spacing-04;
+  margin-block: $spacing-04;
+  background: $layer-01;
+}
+
+.planStepOff { opacity: 0.55; }
+
+.planStepTop {
+  display: flex;
+  align-items: flex-start;
+  gap: $spacing-03;
+}
+
+.psNum {
+  @include type-style('label-01');
+  inline-size: 22px;
+  block-size: 22px;
+  border-radius: 50%;
+  background: $layer-accent-01;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.psTitle { @include type-style('heading-compact-01'); }
+
+.psMeta {
+  display: flex;
+  gap: $spacing-03;
+  margin-block-start: $spacing-02;
+}
+
+.psGrid {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-02;
+  margin-block-start: $spacing-03;
+}
+
+.approveBox { margin-block-start: $spacing-03; }
+
+.toggleRow { margin-block-start: $spacing-03; }
+
+.approvalBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: $spacing-04;
+  padding: $spacing-05 0 0;
+  margin-block-start: $spacing-05;
+  border-block-start: 1px solid $border-subtle-01;
+}
+
+.approvalInfo {
+  @include type-style('label-01');
+  color: $text-secondary;
+  margin-inline-end: auto;
+}
+
+/* Execution */
+.execTimeline {
+  margin-block-start: $spacing-05;
+  display: flex;
+  flex-direction: column;
+}
+
+.execNode {
+  display: flex;
+  gap: $spacing-04;
+  padding-block: $spacing-04;
+  border-block-end: 1px solid $border-subtle-01;
+}
+
+.execRail {
+  display: grid;
+  place-items: start center;
+  inline-size: 20px;
+  flex: none;
+}
+
+.execDot {
+  inline-size: 12px;
+  block-size: 12px;
+  border-radius: 50%;
+  border: 2px solid $border-strong-01;
+  margin-block-start: 3px;
+}
+
+.execTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-03;
+}
+
+.evidenceLine {
+  display: flex;
+  align-items: center;
+  gap: $spacing-02;
+  margin-block-start: $spacing-03;
+  @include type-style('label-01');
+  color: $link-primary;
+}
+
+.failureCard {
+  margin-block-start: $spacing-03;
+  padding: $spacing-04;
+  background: $layer-01;
+  border-inline-start: 3px solid $support-warning;
+  border-radius: 4px;
+}
+
+.failMsg {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+  @include type-style('body-01');
+  margin-block-end: $spacing-02;
+}
+
+/* Completion */
+.compHero {
+  display: flex;
+  align-items: center;
+  gap: $spacing-04;
+  padding: $spacing-05;
+  background: $layer-01;
+  border-radius: 6px;
+  margin-block-end: $spacing-05;
+}
+
+.compRow {
+  display: flex;
+  align-items: flex-start;
+  gap: $spacing-03;
+  padding-block: $spacing-03;
+  border-block-end: 1px solid $border-subtle-01;
+}
+
+/* Mode picker rows */
+.modeRow {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-02;
+  padding: $spacing-04;
+  text-align: start;
+  background: $layer-01;
+  border: 1px solid $border-subtle-01;
+  border-radius: 6px;
+  cursor: pointer;
+  color: inherit;
+}
+
+.modeActive { border-color: $border-interactive; }
