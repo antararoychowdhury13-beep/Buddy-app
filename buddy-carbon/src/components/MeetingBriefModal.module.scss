@@ -1,0 +1,50 @@
+@use '@carbon/react/scss/spacing' as *;
+@use '@carbon/react/scss/theme' as *;
+@use '@carbon/react/scss/type' as *;
+
+.head {
+  margin-block-end: $spacing-05;
+}
+
+.objective {
+  @include type-style('body-01');
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: $spacing-04;
+  margin-block-start: $spacing-04;
+}
+
+.updated {
+  @include type-style('label-01');
+  color: $text-secondary;
+}
+
+.subhead {
+  @include type-style('heading-compact-01');
+  margin-block: $spacing-05 $spacing-03;
+}
+
+.body {
+  @include type-style('body-01');
+}
+
+.attRole {
+  @include type-style('label-01');
+  color: $text-secondary;
+}
+
+.sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $spacing-03;
+  margin-block-start: $spacing-05;
+}
+
+.fineprint {
+  @include type-style('label-01');
+  color: $text-secondary;
+  margin-block-start: $spacing-05;
+}
