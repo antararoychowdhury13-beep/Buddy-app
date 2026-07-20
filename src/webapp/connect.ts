@@ -5,6 +5,7 @@ import { db, getOrCreateSingleUser } from "../db.js";
 import { createOAuthClient, GOOGLE_CALENDAR_SCOPES } from "../connectors/googleOAuth.js";
 import { escapeHtml, icon } from "./design.js";
 import { renderShell } from "./shell.js";
+import { exchangeCodeForToken, fetchUserInfo, OAUTH_PROVIDERS, resolveCredentials, saveCredentials } from "./oauthProviders.js";
 
 export const connectRouter = express.Router();
 
@@ -16,20 +17,24 @@ function requireEmail(): string {
 
 // Fixed redirect target already registered on the OAuth client (originally
 // for the CLI auth script) — reusing it means the in-app Connect button
-// never needs a new redirect URI added in Google Cloud Console.
+// never needs a new redirect URI added in Google Cloud Console. Both the
+// Calendar data-access flow and the Google identity-login flow share this
+// one callback, distinguished by "intent" carried in the state map.
 const GOOGLE_CALLBACK_PORT = 3939;
 const GOOGLE_REDIRECT_URI = `http://localhost:${GOOGLE_CALLBACK_PORT}/oauth2callback`;
+
+type PendingIntent = { expiresAt: number; intent: "calendar" | "login" };
 
 // Short-lived CSRF state for the Google OAuth round trip. Single-process,
 // single-user prototype — an in-memory map is enough; entries are pruned
 // opportunistically whenever a new one is created.
 const PENDING_STATE_TTL_MS = 10 * 60 * 1000;
-const pendingStates = new Map<string, number>();
+const pendingStates = new Map<string, PendingIntent>();
 
 function pruneExpiredStates() {
   const now = Date.now();
-  for (const [state, expiresAt] of pendingStates) {
-    if (expiresAt < now) pendingStates.delete(state);
+  for (const [state, entry] of pendingStates) {
+    if (entry.expiresAt < now) pendingStates.delete(state);
   }
 }
 
@@ -38,7 +43,7 @@ function pruneExpiredStates() {
 connectRouter.get("/connect/google", (_req, res) => {
   pruneExpiredStates();
   const state = crypto.randomUUID();
-  pendingStates.set(state, Date.now() + PENDING_STATE_TTL_MS);
+  pendingStates.set(state, { expiresAt: Date.now() + PENDING_STATE_TTL_MS, intent: "calendar" });
 
   const oauth2Client = createOAuthClient(GOOGLE_REDIRECT_URI);
   const authUrl = oauth2Client.generateAuthUrl({
@@ -51,11 +56,35 @@ connectRouter.get("/connect/google", (_req, res) => {
   res.redirect(authUrl);
 });
 
+// ---------------------------------------------------------------- Google identity ("Sign in with Google")
+
+connectRouter.get("/login/google", (_req, res) => {
+  pruneExpiredStates();
+  const state = crypto.randomUUID();
+  pendingStates.set(state, { expiresAt: Date.now() + PENDING_STATE_TTL_MS, intent: "login" });
+
+  const oauth2Client = createOAuthClient(GOOGLE_REDIRECT_URI);
+  const authUrl = oauth2Client.generateAuthUrl({
+    scope: ["openid", "email", "profile"],
+    prompt: "select_account",
+    state,
+  });
+
+  res.redirect(authUrl);
+});
+
+connectRouter.post("/login/google/disconnect", async (_req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
+  await db.from("social_login").delete().eq("user_id", user.id).eq("provider", "google");
+  res.redirect("/me?disconnected=google_login");
+});
+
 /** Handles the OAuth exchange; returns the /me query string to redirect the browser to. */
 async function handleGoogleOAuthCallback(code: string | undefined, state: string | undefined): Promise<string> {
   if (!state || !pendingStates.has(state)) {
     return "/me?connect_error=invalid_state";
   }
+  const { intent } = pendingStates.get(state) as PendingIntent;
   pendingStates.delete(state);
 
   if (!code) {
@@ -64,6 +93,24 @@ async function handleGoogleOAuthCallback(code: string | undefined, state: string
 
   const user = await getOrCreateSingleUser(requireEmail());
   const oauth2Client = createOAuthClient(GOOGLE_REDIRECT_URI);
+
+  if (intent === "login") {
+    try {
+      const { tokens } = await oauth2Client.getToken(code);
+      if (!tokens.access_token) return "/me?connect_error=exchange_failed";
+      const profile = await fetchUserInfo(OAUTH_PROVIDERS.google, tokens.access_token);
+      await db
+        .from("social_login")
+        .upsert(
+          { user_id: user.id, provider: "google", provider_user_id: profile.id, name: profile.name, email: profile.email },
+          { onConflict: "user_id,provider" }
+        );
+      return "/me?social_connected=google";
+    } catch (err) {
+      console.error("Google identity login failed:", err);
+      return "/me?connect_error=exchange_failed";
+    }
+  }
 
   try {
     const { tokens } = await oauth2Client.getToken(code);
@@ -160,6 +207,140 @@ connectRouter.post("/connect/google/disconnect", async (_req, res) => {
     .eq("type", "google_calendar");
 
   res.redirect("/me?disconnected=google_calendar");
+});
+
+// ---------------------------------------------------------------- Other social logins (generic, config-driven)
+//
+// Same OAuth2 pattern as Google, driven entirely by src/webapp/oauthProviders.ts.
+// Facebook/LinkedIn/GitHub have no real client id/secret configured — clicking
+// Connect explains that honestly instead of pretending to log in. Once someone
+// registers a real developer app for one of these and adds the credentials to
+// .env, this same route makes it work with no code changes.
+
+function baseUrl(req: express.Request): string {
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+const genericPendingStates = new Map<string, number>();
+function pruneGenericStates() {
+  const now = Date.now();
+  for (const [state, expiresAt] of genericPendingStates) {
+    if (expiresAt < now) genericPendingStates.delete(state);
+  }
+}
+
+connectRouter.get("/login/:provider", async (req, res) => {
+  const providerId = req.params.provider;
+  const provider = OAUTH_PROVIDERS[providerId];
+  if (!provider || providerId === "google") {
+    // Google has its own dedicated route above (fixed callback port).
+    res.status(404).send("Unknown provider");
+    return;
+  }
+
+  const user = await getOrCreateSingleUser(requireEmail());
+  const credentials = await resolveCredentials(user.id, providerId);
+  if (!credentials) {
+    res.redirect(`/me?social_error=not_configured&provider=${encodeURIComponent(providerId)}`);
+    return;
+  }
+
+  pruneGenericStates();
+  const state = crypto.randomUUID();
+  genericPendingStates.set(state, Date.now() + PENDING_STATE_TTL_MS);
+
+  const redirectUri = `${baseUrl(req)}/login/callback/${providerId}`;
+  const params = new URLSearchParams({
+    client_id: credentials.clientId,
+    redirect_uri: redirectUri,
+    scope: provider.scope,
+    response_type: "code",
+    state,
+    ...(provider.extraAuthParams ?? {}),
+  });
+
+  res.redirect(`${provider.authorizationUrl}?${params.toString()}`);
+});
+
+connectRouter.get("/login/callback/:provider", async (req, res) => {
+  const providerId = req.params.provider;
+  const provider = OAUTH_PROVIDERS[providerId];
+  const { code, state, error: oauthError } = req.query as { code?: string; state?: string; error?: string };
+
+  if (!provider) {
+    res.status(404).send("Unknown provider");
+    return;
+  }
+  if (oauthError) {
+    res.redirect(`/me?social_error=${encodeURIComponent(oauthError)}`);
+    return;
+  }
+  if (!state || !genericPendingStates.has(state)) {
+    res.redirect("/me?social_error=invalid_state");
+    return;
+  }
+  genericPendingStates.delete(state);
+  if (!code) {
+    res.redirect("/me?social_error=missing_code");
+    return;
+  }
+
+  try {
+    const user = await getOrCreateSingleUser(requireEmail());
+    const credentials = await resolveCredentials(user.id, providerId);
+    if (!credentials) {
+      res.redirect(`/me?social_error=not_configured&provider=${encodeURIComponent(providerId)}`);
+      return;
+    }
+
+    const redirectUri = `${baseUrl(req)}/login/callback/${providerId}`;
+    const accessToken = await exchangeCodeForToken(provider, code, redirectUri, credentials);
+    const profile = await fetchUserInfo(provider, accessToken);
+
+    await db
+      .from("social_login")
+      .upsert(
+        { user_id: user.id, provider: providerId, provider_user_id: profile.id, name: profile.name, email: profile.email },
+        { onConflict: "user_id,provider" }
+      );
+
+    res.redirect(`/me?social_connected=${encodeURIComponent(providerId)}`);
+  } catch (err) {
+    console.error(`${providerId} identity login failed:`, err);
+    res.redirect("/me?social_error=exchange_failed");
+  }
+});
+
+connectRouter.post("/login/:provider/disconnect", async (req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
+  await db.from("social_login").delete().eq("user_id", user.id).eq("provider", req.params.provider);
+  res.redirect("/me?disconnected=" + encodeURIComponent(req.params.provider) + "_login");
+});
+
+// User-supplied OAuth app credentials — filled in from the form on the Me
+// page instead of an operator editing .env. Once saved, /login/:provider
+// picks them up automatically (resolveCredentials checks the DB first).
+connectRouter.post("/oauth-credentials/:provider", async (req, res) => {
+  const providerId = req.params.provider;
+  if (!OAUTH_PROVIDERS[providerId]) {
+    res.status(404).send("Unknown provider");
+    return;
+  }
+  const { clientId, clientSecret } = req.body as { clientId?: string; clientSecret?: string };
+  if (!clientId?.trim() || !clientSecret?.trim()) {
+    res.redirect(`/me?social_error=missing_credentials&provider=${encodeURIComponent(providerId)}&configureProvider=${encodeURIComponent(providerId)}#configure-oauth`);
+    return;
+  }
+
+  const user = await getOrCreateSingleUser(requireEmail());
+  await saveCredentials(user.id, providerId, clientId.trim(), clientSecret.trim());
+  res.redirect(`/me?provider_configured=${encodeURIComponent(providerId)}`);
+});
+
+connectRouter.post("/oauth-credentials/:provider/remove", async (req, res) => {
+  const user = await getOrCreateSingleUser(requireEmail());
+  await db.from("oauth_credential").delete().eq("user_id", user.id).eq("provider", req.params.provider);
+  res.redirect("/me?disconnected=" + encodeURIComponent(req.params.provider) + "_credentials");
 });
 
 // ---------------------------------------------------------------- Weather

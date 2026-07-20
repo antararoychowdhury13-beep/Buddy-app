@@ -2,3 +2,6 @@ node_modules/
 dist/
 .env
 .cache/
+
+# Claude Code local settings (not app code)
+.claude/settings.local.json

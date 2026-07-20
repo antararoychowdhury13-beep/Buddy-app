@@ -12,7 +12,9 @@
     "test": "tsx scripts/test-trust-engine.ts",
     "test:speech": "tsx scripts/test-speech-smoke.ts",
     "test:stt": "tsx scripts/test-stt-roundtrip.ts",
-    "typecheck": "tsc -p tsconfig.scripts.json"
+    "build:homeai": "tsc -p tsconfig.homeai.json",
+    "build:homeai:watch": "tsc -p tsconfig.homeai.json --watch",
+    "typecheck": "tsc -p tsconfig.scripts.json && tsc -p tsconfig.homeai.json --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

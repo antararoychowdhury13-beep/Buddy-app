@@ -30,6 +30,16 @@ export function formatClockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+/** "Good day" is what a stranger says. A chief of staff knows what time it is. */
+export function timeOfDayGreeting(date = new Date()): string {
+  const hour = date.getHours();
+  if (hour < 5) return "Still up,";
+  if (hour < 12) return "Good morning,";
+  if (hour < 17) return "Good afternoon,";
+  if (hour < 21) return "Good evening,";
+  return "Winding down,";
+}
+
 /** Restricts a user-supplied redirect target to an internal relative path, preventing open-redirect. */
 export function safeInternalPath(path: unknown, fallback = "/"): string {
   if (typeof path === "string" && path.startsWith("/") && !path.startsWith("//")) {
@@ -38,20 +48,3 @@ export function safeInternalPath(path: unknown, fallback = "/"): string {
   return fallback;
 }
 
-/**
- * Roadmap directory shown on the Me page under "More integrations" — none of
- * these are wired up (only Calendar/Weather are real), shown honestly as
- * "Coming soon" rather than implying they work.
- */
-export const PLANNED_INTEGRATIONS: { category: string; apps: string[] }[] = [
-  { category: "Work & Productivity", apps: ["Outlook Calendar", "Slack", "Microsoft Teams", "Zoom", "Notion", "Asana", "Trello", "Jira", "Monday.com"] },
-  { category: "Email & Messaging", apps: ["Gmail", "Outlook Mail", "WhatsApp", "Telegram", "Signal", "iMessage", "Discord", "Google Meet", "Webex", "Skype"] },
-  { category: "Commute & Maps", apps: ["Google Maps", "Apple Maps", "Waze", "Uber", "Ola", "Rapido", "IRCTC", "Citymapper", "Moovit", "MapmyIndia"] },
-  { category: "Finance & Banking", apps: ["Google Pay", "PhonePe", "Paytm", "HDFC Bank", "ICICI Bank", "SBI YONO", "Zerodha Kite", "Groww", "CRED", "Splitwise"] },
-  { category: "Health & Fitness", apps: ["Apple Health", "Google Fit", "Fitbit", "Strava", "MyFitnessPal", "Practo", "Tata 1mg", "Cult.fit", "Headspace", "Calm"] },
-  { category: "Family & Home", apps: ["Life360", "Google Family Link", "FamilyWall", "Cozi", "Amazon Alexa", "Google Home", "Ring", "Nest", "myGate", "NoBroker"] },
-  { category: "Shopping & Food", apps: ["Amazon", "Flipkart", "Swiggy", "Zomato", "BigBasket", "Blinkit", "Myntra", "Ajio", "Instacart", "DoorDash"] },
-  { category: "Entertainment & Media", apps: ["Spotify", "YouTube Music", "Netflix", "Prime Video", "Disney+ Hotstar", "JioCinema", "Audible", "Kindle", "Goodreads", "Pocket"] },
-  { category: "Travel", apps: ["MakeMyTrip", "Booking.com", "Airbnb", "Skyscanner", "Google Flights", "TripIt", "ClearTrip", "Yatra", "ixigo", "Expedia"] },
-  { category: "Career & Learning", apps: ["LinkedIn", "Coursera", "Udemy", "Duolingo", "GitHub", "Stack Overflow", "Glassdoor", "Naukri.com", "Google Scholar", "Medium"] },
-];

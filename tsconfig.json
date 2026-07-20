@@ -10,5 +10,6 @@
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/homeai/ui", "src/homeai/today", "src/homeai/ask", "src/homeai/life", "src/homeai/store.ts", "src/homeai/engines"]
 }

@@ -34,6 +34,11 @@ export const DESIGN_CSS = `
   --rose: #FF6FA0; --rose-dim: rgba(255,111,160,0.14);
   --grad-brand: linear-gradient(135deg, var(--violet), var(--iris));
   --r-sm: 8px; --r-md: 14px; --r-lg: 20px; --r-pill: 999px;
+  /* Carbon motion tokens (expressive set — mobile-appropriate, not the flatter "productive" curves) */
+  --dur-fast: 110ms; --dur-moderate: 150ms; --dur-slow: 240ms;
+  --ease-standard: cubic-bezier(0.4, 0.14, 0.3, 1);
+  --ease-entrance: cubic-bezier(0, 0, 0.3, 1);
+  --ease-exit: cubic-bezier(0.4, 0.14, 1, 1);
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -131,7 +136,9 @@ button { font-family: inherit; }
   border-radius: var(--r-pill); border: none; cursor: pointer;
   display: inline-flex; align-items: center; gap: 6px;
   padding: 10px 18px;
+  transition: transform var(--dur-fast) var(--ease-standard);
 }
+.btn:active { transform: scale(0.96); }
 .btn-primary { background: var(--grad-brand); color: #0A0B14; }
 .btn-ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
 .btn-outline-good { background: transparent; border: 1.5px solid var(--good); color: var(--good); }
@@ -171,16 +178,48 @@ button { font-family: inherit; }
 .card { background: var(--layer-01); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px; }
 .list-row { display: flex; align-items: center; gap: 10px; background: var(--layer-01); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; margin-bottom: 6px; }
 
-.planned-category { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); margin: 16px 0 8px; }
-.planned-category:first-child { margin-top: 0; }
-.planned-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.planned-chip { font-size: 11.5px; color: var(--faint); background: var(--layer-01); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 5px 10px; }
+.integration-group { margin-bottom: 8px; }
+.integration-group summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; background: var(--layer-01); border: 1px solid var(--line); border-radius: var(--r-md); }
+.integration-group summary::-webkit-details-marker { display: none; }
+.integration-group summary .chev { color: var(--faint); flex-shrink: 0; transition: transform var(--dur-fast) var(--ease-standard); }
+.integration-group[open] summary { border-radius: var(--r-md) var(--r-md) 0 0; }
+.integration-group[open] summary .chev { transform: rotate(90deg); }
+.integration-group-body { border: 1px solid var(--line); border-top: none; border-radius: 0 0 var(--r-md) var(--r-md); padding: 4px 14px; }
+.integration-group:not([open]) .integration-group-body { display: none; }
+.integration-group-counts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
-.trust-row + .trust-row { margin-top: 12px; }
-.trust-row .top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
-.trust-row .bar-track { height: 6px; border-radius: 3px; background: var(--line); }
-.trust-row .bar-fill { height: 100%; border-radius: 3px; }
-.trust-row .caption { font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+.integration-row { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.integration-row:last-child { border-bottom: none; }
+.integration-row .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.integration-row .name { font-size: 12.5px; font-weight: 600; }
+.integration-row .notes { font-size: 11px; color: var(--faint); margin-top: 3px; line-height: 1.4; }
+.integration-row .action { font-size: 11px; color: var(--iris); font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+
+.method-pill { font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em; padding: 3px 8px; border-radius: var(--r-pill); white-space: nowrap; flex-shrink: 0; }
+.method-pill.violet { background: var(--violet-dim); color: var(--violet); }
+.method-pill.iris { background: var(--iris-dim); color: var(--iris); }
+.method-pill.good { background: var(--good-dim); color: var(--good); }
+.method-pill.warn { background: var(--warn-dim); color: var(--warn); }
+.method-pill.rose { background: var(--rose-dim); color: var(--rose); }
+.method-pill.plain { background: var(--layer-02); color: var(--faint); }
+
+/* Carbon-style segmented Meter — shows the real composition of a trust
+   score (confirmed / dismissed / ignored) instead of collapsing it into a
+   single accuracy percentage, so the user can see *why* Buddy trusts (or
+   doesn't trust) a domain, not just the net result. */
+.trust-row + .trust-row { margin-top: 16px; }
+.trust-row .top { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; margin-bottom: 6px; }
+.trust-row .top .pct { font-size: 15px; font-weight: 700; }
+.meter-track { height: 8px; border-radius: 4px; background: var(--line); display: flex; overflow: hidden; }
+.meter-seg { height: 100%; transition: width var(--dur-slow) var(--ease-standard); }
+.meter-seg.good { background: var(--good); }
+.meter-seg.rose { background: var(--rose); }
+.meter-seg.neutral { background: var(--faint); opacity: 0.5; }
+.meter-track.empty { background: var(--layer-02); }
+.meter-legend { display: flex; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+.meter-legend-item { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--faint); }
+.meter-legend-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.trust-row .caption { font-size: 10.5px; color: var(--faint); margin-top: 6px; }
 
 .orb-glow { animation: pulse 3.2s ease-in-out infinite; }
 .wave-bar { animation: wave 1.1s ease-in-out infinite; }
@@ -191,13 +230,13 @@ button { font-family: inherit; }
 /* Menu drawer */
 .scrim {
   position: fixed; inset: 0; background: rgba(4,5,10,0.6);
-  opacity: 0; pointer-events: none; transition: opacity .18s ease;
+  opacity: 0; pointer-events: none; transition: opacity var(--dur-fast) var(--ease-standard);
   z-index: 40;
 }
 .drawer {
   position: fixed; top: 0; bottom: 0; left: 0; width: 80%; max-width: 320px;
   background: var(--layer-01); border-right: 1px solid var(--line);
-  transform: translateX(-100%); transition: transform .22s ease;
+  transform: translateX(-100%); transition: transform var(--dur-moderate) var(--ease-entrance);
   z-index: 41; display: flex; flex-direction: column; padding: 20px 16px;
 }
 body.menu-open .scrim { opacity: 1; pointer-events: auto; }
@@ -232,10 +271,22 @@ body.menu-open .drawer { transform: translateX(0); }
 
 /* Voice screen */
 .voice-stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 20px; text-align: center; }
-.orb-lg { position: relative; width: 132px; height: 132px; }
-.orb-lg .ring { position: absolute; inset: -8px; border-radius: 50%; border: 1px solid rgba(139,124,255,0.4); }
-.orb-lg .glow { position: absolute; inset: -24px; border-radius: 50%; background: radial-gradient(circle, rgba(139,124,255,0.5), transparent 70%); }
+.orb-lg { position: relative; width: 132px; height: 132px; transition: transform var(--dur-moderate) var(--ease-standard); }
+.orb-lg .ring { position: absolute; inset: -8px; border-radius: 50%; border: 1px solid rgba(139,124,255,0.4); transition: border-color var(--dur-moderate) var(--ease-standard); }
+.orb-lg .glow { position: absolute; inset: -24px; border-radius: 50%; background: radial-gradient(circle, rgba(139,124,255,0.5), transparent 70%); transition: background var(--dur-moderate) var(--ease-standard); }
 .orb-lg .core { position: absolute; inset: 0; border-radius: 50%; background: var(--grad-brand); display: flex; align-items: center; justify-content: center; gap: 4px; }
+
+/* Orb state coding — the user should always know which of the three stages
+   (listening / thinking / speaking) Buddy is in without reading the label.
+   Distinct colors + a spinning "thinking" ring make the state legible at a
+   glance, the same way a Carbon InlineLoading or ProgressIndicator would. */
+.orb-lg.state-listening .ring { border-color: rgba(52,211,153,0.55); }
+.orb-lg.state-listening .glow { background: radial-gradient(circle, rgba(52,211,153,0.55), transparent 70%); }
+.orb-lg.state-thinking .ring { border-color: var(--warn); border-style: dashed; animation: spin 900ms linear infinite; }
+.orb-lg.state-thinking .glow { background: radial-gradient(circle, rgba(245,184,77,0.45), transparent 70%); animation: none; }
+.orb-lg.state-speaking .ring { border-color: var(--iris); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .orb-lg.state-thinking .ring { animation: none; } }
 `;
 
 export const ICON_SPRITE = `<svg width="0" height="0" style="position:absolute" aria-hidden="true">

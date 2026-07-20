@@ -1,4 +1,6 @@
 import "dotenv/config";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import { db, getOrCreateSingleUser } from "./db.js";
 import { applyFeedback } from "./trustScoreStore.js";
@@ -14,16 +16,38 @@ import { connectRouter, startGoogleOAuthCallbackServer } from "./webapp/connect.
 import {
   DOMAIN_META,
   formatClockTime,
-  PLANNED_INTEGRATIONS,
   relativeTime,
   safeInternalPath,
   tierPillHtml,
+  timeOfDayGreeting,
 } from "./webapp/helpers.js";
+import { AUTH_METHOD_META, AUTH_METHOD_ORDER, INTEGRATION_REGISTRY } from "./webapp/integrationRegistry.js";
+import { OAUTH_PROVIDERS } from "./webapp/oauthProviders.js";
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(connectRouter);
+
+// AI Home prototype (static): served from public/home-ai. tsx runs from src/,
+// so climb one level to the repo root regardless of build output location.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+app.use("/home-ai", express.static(path.join(repoRoot, "public", "home-ai")));
+
+// Real day-context for the AI Home/Today modules — assembled from the
+// existing Supabase data (calendar events, facts, connectors), with demo
+// fill for domains that have no connector yet. Client falls back to bundled
+// mock if this is unreachable.
+app.get("/api/home-ai/context", async (_req, res) => {
+  try {
+    const user = await getOrCreateSingleUser(requireEmail());
+    const { buildHomeContext } = await import("./homeai/server/context.js");
+    res.json(await buildHomeContext(user.id));
+  } catch (err) {
+    console.error("home-ai context failed:", err);
+    res.status(500).json({ error: "context_failed" });
+  }
+});
 
 function requireEmail(): string {
   const email = process.env.BUDDY_USER_EMAIL;
@@ -156,7 +180,7 @@ app.get("/", async (_req, res) => {
   const headerHtml = `
     <button class="icon-btn" id="menu-toggle" aria-label="Open menu">${icon("menu")}</button>
     <div class="spacer">
-      <div style="font-size:14px; color:var(--mist);">Good day,</div>
+      <div style="font-size:14px; color:var(--mist);">${timeOfDayGreeting()}</div>
       <div style="font-size:20px; font-weight:700;">${escapeHtml(displayName)}</div>
       <div style="font-size:11.5px; color:var(--faint);">I've connected your world.</div>
     </div>
@@ -200,7 +224,7 @@ app.get("/", async (_req, res) => {
       </div>
       <div class="tile">
         <div class="chip warn">${icon("sliders", "i i-sm")}</div>
-        <div class="num mono">${avgConfidence !== null ? avgConfidence.toFixed(2) : "—"}</div>
+        <div class="num mono">${avgConfidence !== null ? `${Math.round(avgConfidence * 100)}%` : "—"}</div>
         <div class="lbl">Avg. confidence</div>
       </div>
     </div>
@@ -306,6 +330,17 @@ const CONNECT_ERROR_MESSAGE: Record<string, string> = {
   missing_code: "Google didn't return an authorization code. Please try again.",
 };
 
+const SOCIAL_LOGIN_ORDER = ["google", "facebook", "linkedin", "github", "microsoft", "discord", "spotify"] as const;
+const SOCIAL_LOGIN_CHIP: Record<(typeof SOCIAL_LOGIN_ORDER)[number], string> = {
+  google: "good",
+  facebook: "iris",
+  linkedin: "iris",
+  github: "violet",
+  microsoft: "iris",
+  discord: "violet",
+  spotify: "good",
+};
+
 const FACT_CATEGORY_LABEL: Record<string, string> = {
   home: "Home",
   office: "Office",
@@ -317,9 +352,11 @@ const FACT_CATEGORY_LABEL: Record<string, string> = {
 
 app.get("/me", async (req, res) => {
   const user = await getOrCreateSingleUser(requireEmail());
-  const [{ data: trustScores }, { data: connectorRows }, facts] = await Promise.all([
+  const [{ data: trustScores }, { data: connectorRows }, { data: socialLoginRows }, { data: oauthCredentialRows }, facts] = await Promise.all([
     db.from("trust_score").select("*").eq("user_id", user.id).order("domain"),
     db.from("connector").select("*").eq("user_id", user.id),
+    db.from("social_login").select("*").eq("user_id", user.id),
+    db.from("oauth_credential").select("provider, client_id").eq("user_id", user.id),
     getFacts(user.id),
   ]);
 
@@ -332,13 +369,39 @@ app.get("/me", async (req, res) => {
   const trustHtml = (trustScores ?? [])
     .map((t) => {
       const meta = DOMAIN_META[t.domain as Domain];
-      const pct = Math.round(Number(t.accuracy) * 100);
-      const barColor = `var(--${meta.chip === "iris" ? "iris" : meta.chip === "violet" ? "violet" : meta.chip === "good" ? "good" : meta.chip === "warn" ? "warn" : "rose"})`;
+      const confirmed = t.confirmed_count ?? 0;
+      const dismissed = t.dismissed_count ?? 0;
+      const ignored = t.ignored_count ?? 0;
+      const total = confirmed + dismissed + ignored;
+      const judged = confirmed + dismissed;
+      const pctLabel = judged > 0 ? `${Math.round((confirmed / judged) * 100)}%` : "—";
+
+      if (total === 0) {
+        return `
+        <div class="trust-row">
+          <div class="top"><span style="font-weight:600;">${meta.label}</span><span class="pct" style="color:var(--faint); font-size:12px;">No data</span></div>
+          <div class="meter-track empty"></div>
+          <div class="caption">No feedback yet — confirm or dismiss a nudge to help Buddy learn this domain.</div>
+        </div>`;
+      }
+
+      const legendItems = [
+        confirmed > 0 ? `<span class="meter-legend-item"><span class="meter-legend-dot" style="background:var(--good);"></span>${confirmed} confirmed</span>` : "",
+        dismissed > 0 ? `<span class="meter-legend-item"><span class="meter-legend-dot" style="background:var(--rose);"></span>${dismissed} dismissed</span>` : "",
+        ignored > 0 ? `<span class="meter-legend-item"><span class="meter-legend-dot" style="background:var(--faint); opacity:0.5;"></span>${ignored} ignored</span>` : "",
+      ]
+        .filter(Boolean)
+        .join("");
+
       return `
       <div class="trust-row">
-        <div class="top"><span style="font-weight:600;">${meta.label}</span><span class="mono">${pct}%</span></div>
-        <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${barColor};"></div></div>
-        <div class="caption">${t.confirmed_count} confirmed · ${t.dismissed_count} dismissed · evidence ${t.evidence_count}</div>
+        <div class="top"><span style="font-weight:600;">${meta.label}</span><span class="pct">${pctLabel}</span></div>
+        <div class="meter-track">
+          <div class="meter-seg good" style="width:${(confirmed / total) * 100}%"></div>
+          <div class="meter-seg rose" style="width:${(dismissed / total) * 100}%"></div>
+          <div class="meter-seg neutral" style="width:${(ignored / total) * 100}%"></div>
+        </div>
+        <div class="meter-legend">${legendItems}</div>
       </div>`;
     })
     .join("");
@@ -364,17 +427,161 @@ app.get("/me", async (req, res) => {
     })
     .join("");
 
+  const socialLoginsByProvider = new Map((socialLoginRows ?? []).map((r) => [r.provider as string, r]));
+  const oauthCredByProvider = new Map((oauthCredentialRows ?? []).map((r) => [r.provider as string, r]));
+
+  function isSocialProviderConfigured(providerId: string): boolean {
+    if (oauthCredByProvider.has(providerId)) return true;
+    const provider = OAUTH_PROVIDERS[providerId];
+    return Boolean(process.env[provider.clientIdEnvVar] && process.env[provider.clientSecretEnvVar]);
+  }
+
+  const socialLoginHtml = SOCIAL_LOGIN_ORDER.map((providerId) => {
+    const provider = OAUTH_PROVIDERS[providerId];
+    const row = socialLoginsByProvider.get(providerId);
+    const chip = SOCIAL_LOGIN_CHIP[providerId];
+    let action: string;
+    if (row) {
+      action = `<span style="font-size:10px; font-weight:600; color:var(--good); margin-right:8px;">${escapeHtml(row.name ?? row.email ?? "Connected")}</span>
+        <form method="post" action="/login/${providerId}/disconnect"><button class="btn btn-ghost btn-sm" type="submit">Disconnect</button></form>`;
+    } else if (isSocialProviderConfigured(providerId)) {
+      action = `<a href="/login/${providerId}" class="btn btn-primary btn-sm">Sign in</a>${
+        providerId !== "google"
+          ? ` <a href="/me?configureProvider=${providerId}#configure-oauth" style="font-size:10.5px; color:var(--faint); margin-left:6px;">Edit</a>`
+          : ""
+      }`;
+    } else {
+      action = `<a href="/me?configureProvider=${providerId}#configure-oauth" class="btn btn-ghost btn-sm">Set up</a>`;
+    }
+    return `
+    <div class="list-row">
+      <div class="chip ${chip}" style="width:32px; height:32px; border-radius:9px;">${icon("person", "i i-sm")}</div>
+      <div style="flex:1; font-size:12.5px; font-weight:600;">${escapeHtml(provider.displayName)}</div>
+      ${action}
+    </div>`;
+  }).join("");
+
+  const configureProviderId =
+    typeof req.query.configureProvider === "string" && OAUTH_PROVIDERS[req.query.configureProvider] && req.query.configureProvider !== "google"
+      ? req.query.configureProvider
+      : null;
+
+  const configureOauthHtml = configureProviderId
+    ? (() => {
+        const provider = OAUTH_PROVIDERS[configureProviderId];
+        const existing = oauthCredByProvider.get(configureProviderId);
+        const redirectUri = `${req.protocol}://${req.get("host")}/login/callback/${configureProviderId}`;
+        return `
+        <div class="card" id="configure-oauth" style="margin-top:10px; scroll-margin-top:16px;">
+          <div style="font-size:12.5px; font-weight:600; margin-bottom:2px;">Set up ${escapeHtml(provider.displayName)} sign-in</div>
+          <div style="font-size:11px; color:var(--faint); margin-bottom:12px; line-height:1.5;">
+            Register a developer app on ${escapeHtml(provider.displayName)}'s site with this exact redirect URI, then paste its client ID and secret below.
+          </div>
+          <div class="mono" style="font-size:10.5px; color:var(--mist); background:var(--layer-02); border-radius:var(--r-sm); padding:8px 10px; margin-bottom:12px; word-break:break-all;">${escapeHtml(redirectUri)}</div>
+          <form method="post" action="/oauth-credentials/${configureProviderId}" style="display:flex; flex-direction:column; gap:10px;">
+            <label style="font-size:11.5px; color:var(--mist);">Client ID
+              <input type="text" name="clientId" value="${escapeHtml(existing?.client_id ?? "")}" required autofocus
+                style="width:100%; margin-top:5px; background:var(--layer-02); border:1px solid var(--line); border-radius:var(--r-md); padding:9px 10px; color:var(--text); font-family:inherit; font-size:12.5px;" />
+            </label>
+            <label style="font-size:11.5px; color:var(--mist);">Client Secret
+              <input type="password" name="clientSecret" placeholder="${existing ? "•••••••••••••••• (saved — paste a new one to replace)" : ""}" required
+                style="width:100%; margin-top:5px; background:var(--layer-02); border:1px solid var(--line); border-radius:var(--r-md); padding:9px 10px; color:var(--text); font-family:inherit; font-size:12.5px;" />
+            </label>
+            <button class="btn btn-primary btn-sm" type="submit" style="align-self:flex-start;">Save &amp; enable sign-in</button>
+          </form>
+        </div>`;
+      })()
+    : "";
+
+  const integrationsHtml = INTEGRATION_REGISTRY.map((group) => {
+    const counts = new Map<string, number>();
+    for (const integrationApp of group.apps) {
+      counts.set(integrationApp.authMethod, (counts.get(integrationApp.authMethod) ?? 0) + 1);
+    }
+    const countsHtml = AUTH_METHOD_ORDER.filter((m) => (counts.get(m) ?? 0) > 0)
+      .map((m) => {
+        const meta = AUTH_METHOD_META[m];
+        const pillClass = meta.chip ? `method-pill ${meta.chip}` : "method-pill plain";
+        return `<span class="${pillClass}">${counts.get(m)} ${escapeHtml(meta.short)}</span>`;
+      })
+      .join("");
+
+    const rowsHtml = group.apps
+      .map((integrationApp) => {
+        const meta = AUTH_METHOD_META[integrationApp.authMethod];
+        const pillClass = meta.chip ? `method-pill ${meta.chip}` : "method-pill plain";
+        let action: string;
+        if (integrationApp.authMethod === "api_key") {
+          action = `<a class="action" href="/me?noteKey=${encodeURIComponent(`${integrationApp.name} API key`)}#save-note">Add API key</a>`;
+        } else if (integrationApp.authMethod === "manual") {
+          action = `<a class="action" href="/me?noteKey=${encodeURIComponent(integrationApp.name)}#save-note">Save a note</a>`;
+        } else {
+          const label =
+            integrationApp.authMethod === "oauth"
+              ? "Needs developer app"
+              : integrationApp.authMethod === "aggregator"
+              ? "Needs licensed aggregator"
+              : integrationApp.authMethod === "device_only"
+              ? "Needs companion app"
+              : "Not available";
+          action = `<span class="action" style="color:var(--faint); font-weight:500;">${label}</span>`;
+        }
+        return `
+        <div class="integration-row">
+          <div class="top">
+            <span class="name">${escapeHtml(integrationApp.name)}</span>
+            <span class="${pillClass}">${escapeHtml(meta.label)}</span>
+          </div>
+          <div class="notes">${escapeHtml(integrationApp.notes)}</div>
+          <div style="margin-top:6px;">${action}</div>
+        </div>`;
+      })
+      .join("");
+
+    return `
+    <details class="integration-group">
+      <summary>
+        <span style="display:flex; align-items:center; gap:8px;">${icon("chevron-r", "i i-sm chev")}<span style="font-weight:600; font-size:13px;">${escapeHtml(group.category)}</span></span>
+        <span class="integration-group-counts">${countsHtml}</span>
+      </summary>
+      <div class="integration-group-body">${rowsHtml}</div>
+    </details>`;
+  }).join("");
+
   const connected = typeof req.query.connected === "string" ? req.query.connected : null;
   const disconnected = typeof req.query.disconnected === "string" ? req.query.disconnected : null;
   const connectError = typeof req.query.connect_error === "string" ? req.query.connect_error : null;
+  const socialConnected = typeof req.query.social_connected === "string" ? req.query.social_connected : null;
+  const socialErrorCode = typeof req.query.social_error === "string" ? req.query.social_error : null;
+  const socialErrorProvider = typeof req.query.provider === "string" ? req.query.provider : null;
+  const providerConfigured = typeof req.query.provider_configured === "string" ? req.query.provider_configured : null;
+  const draftNoteKey = typeof req.query.noteKey === "string" ? req.query.noteKey : "";
 
   let bannerHtml = "";
   if (connected) {
     bannerHtml = `<div class="card" style="margin-top:12px; border-color:var(--good); color:var(--good); font-size:13px;">${CONNECT_BANNER_LABEL[connected] ?? connected} connected.</div>`;
   } else if (disconnected) {
-    bannerHtml = `<div class="card" style="margin-top:12px; font-size:13px; color:var(--mist);">${CONNECT_BANNER_LABEL[disconnected] ?? disconnected} disconnected.</div>`;
+    const label = CONNECT_BANNER_LABEL[disconnected] ?? disconnected.replace(/_login$/, " sign-in").replace(/_credentials$/, " credentials").replace(/_/g, " ");
+    bannerHtml = `<div class="card" style="margin-top:12px; font-size:13px; color:var(--mist);">${escapeHtml(label)} disconnected.</div>`;
   } else if (connectError) {
     bannerHtml = `<div class="card" style="margin-top:12px; border-color:var(--crit); color:var(--crit); font-size:13px;">${escapeHtml(CONNECT_ERROR_MESSAGE[connectError] ?? "Something went wrong connecting that.")}</div>`;
+  } else if (providerConfigured) {
+    const label = OAUTH_PROVIDERS[providerConfigured]?.displayName ?? providerConfigured;
+    bannerHtml = `<div class="card" style="margin-top:12px; border-color:var(--good); color:var(--good); font-size:13px;">${escapeHtml(label)} credentials saved — tap Sign in to connect.</div>`;
+  } else if (socialConnected) {
+    const label = OAUTH_PROVIDERS[socialConnected]?.displayName ?? socialConnected;
+    bannerHtml = `<div class="card" style="margin-top:12px; border-color:var(--good); color:var(--good); font-size:13px;">Signed in with ${escapeHtml(label)}.</div>`;
+  } else if (socialErrorCode) {
+    const providerLabel = socialErrorProvider ? OAUTH_PROVIDERS[socialErrorProvider]?.displayName ?? socialErrorProvider : "That provider";
+    const message =
+      socialErrorCode === "not_configured"
+        ? `${providerLabel} sign-in needs a developer app registered first (client id/secret) — nothing is configured yet.`
+        : socialErrorCode === "missing_credentials"
+        ? "Enter both a client ID and client secret to save."
+        : socialErrorCode === "invalid_state"
+        ? "That sign-in link expired. Please try again."
+        : "Something went wrong signing in with that provider.";
+    bannerHtml = `<div class="card" style="margin-top:12px; border-color:var(--crit); color:var(--crit); font-size:13px;">${escapeHtml(message)}</div>`;
   }
 
   const bodyHtml = `
@@ -388,16 +595,14 @@ app.get("/me", async (req, res) => {
     <div class="section-head"><h2>Connected accounts</h2></div>
     ${connectorHtml}
 
-    <div class="section-head"><h2>More integrations</h2><span style="font-size:11px; color:var(--faint);">Coming soon</span></div>
-    <div class="card">
-      ${PLANNED_INTEGRATIONS.map(
-        (group) => `
-        <div class="planned-category">${escapeHtml(group.category)}</div>
-        <div class="planned-chips">${group.apps.map((app) => `<span class="planned-chip">${escapeHtml(app)}</span>`).join("")}</div>`
-      ).join("")}
-    </div>
+    <div class="section-head"><h2>Sign in with</h2></div>
+    ${socialLoginHtml}
+    ${configureOauthHtml}
 
-    <div class="section-head"><h2>Personal info Buddy remembers</h2></div>
+    <div class="section-head"><h2>More integrations</h2><span style="font-size:11px; color:var(--faint);">Coming soon</span></div>
+    ${integrationsHtml}
+
+    <div class="section-head" id="save-note" style="scroll-margin-top:16px;"><h2>Personal info Buddy remembers</h2></div>
     <div class="card">
       ${
         facts.length > 0
@@ -423,10 +628,10 @@ app.get("/me", async (req, res) => {
           <select name="category" style="background:var(--layer-02); border:1px solid var(--line); border-radius:var(--r-md); padding:9px 10px; color:var(--text); font-family:inherit; font-size:12.5px; flex-shrink:0;">
             ${Object.entries(FACT_CATEGORY_LABEL).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
           </select>
-          <input type="text" name="key" placeholder="e.g. wife's phone number" required
+          <input type="text" name="key" placeholder="e.g. wife's phone number" required value="${escapeHtml(draftNoteKey)}" ${draftNoteKey ? "autofocus" : ""}
             style="flex:1; min-width:0; background:var(--layer-02); border:1px solid var(--line); border-radius:var(--r-md); padding:9px 10px; color:var(--text); font-family:inherit; font-size:12.5px;" />
         </div>
-        <input type="text" name="value" placeholder="Value" required
+        <input type="text" name="value" placeholder="${draftNoteKey.endsWith("API key") ? "Paste your API key here" : "Value"}" required
           style="background:var(--layer-02); border:1px solid var(--line); border-radius:var(--r-md); padding:9px 10px; color:var(--text); font-family:inherit; font-size:12.5px;" />
         <button class="btn btn-primary btn-sm" type="submit" style="align-self:flex-start;">Save</button>
       </form>
@@ -617,7 +822,7 @@ app.get("/voice", async (_req, res) => {
       </div>
       <div class="mono" style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--mist);" id="voice-state">Tap to ask</div>
       <div id="voice-default-text" style="max-width:280px; font-size:14.5px; line-height:1.55;">
-        ${text ? escapeHtml(text) : "No briefing yet — run <code>npm run ingest</code>."}
+        ${text ? escapeHtml(text) : "Nothing to brief you on yet today — ask me anything in the meantime."}
       </div>
       <div id="voice-transcript" hidden style="max-width:300px; font-size:13.5px; line-height:1.55; text-align:left; display:flex; flex-direction:column; gap:8px;"></div>
       <div id="voice-error" hidden style="max-width:280px; font-size:12px; line-height:1.5; color:var(--crit); background:var(--crit-dim); border-radius:var(--r-md); padding:10px 12px;"></div>
@@ -628,8 +833,10 @@ app.get("/voice", async (_req, res) => {
       }
       <div style="font-size:10.5px; color:var(--faint); max-width:240px;">Tap the orb and ask a question out loud — Buddy answers from your real data.</div>
 
-      <button class="btn btn-ghost btn-sm" type="button" id="wake-toggle" style="margin-top:10px;">${icon("mic", "i i-sm")}Enable "Buddy" wake word</button>
-      <div style="font-size:10px; color:var(--faint); max-width:260px;" id="wake-note">Off by default. When on, this tab keeps the mic listening locally in short cycles for the word "Buddy" — nothing leaves your machine except the actual question, once triggered.</div>
+      <div style="width:100%; max-width:260px; border-top:1px solid var(--line); margin-top:28px; padding-top:16px; display:flex; flex-direction:column; align-items:center; gap:8px;">
+        <button class="btn btn-ghost btn-sm" type="button" id="wake-toggle" style="opacity:0.75;">${icon("mic", "i i-sm")}Enable "Buddy" wake word</button>
+        <div style="font-size:10px; color:var(--faint); max-width:260px; text-align:center;" id="wake-note">Off by default. When on, this tab keeps the mic listening locally in short cycles for the word "Buddy" — nothing leaves your machine except the actual question, once triggered.</div>
+      </div>
     </div>
   `;
 
@@ -664,7 +871,15 @@ app.get("/voice", async (_req, res) => {
       return wakeEnabled ? "Say \\"Buddy\\"…" : "Tap to ask";
     }
 
-    function setState(text) { if (state) state.textContent = text; }
+    function setState(text) {
+      if (state) state.textContent = text;
+      if (orb) {
+        orb.classList.remove("state-listening", "state-thinking", "state-speaking");
+        if (/^Listening/.test(text)) orb.classList.add("state-listening");
+        else if (/^Thinking/.test(text)) orb.classList.add("state-thinking");
+        else if (/^Speaking/.test(text)) orb.classList.add("state-speaking");
+      }
+    }
     function escapeForDisplay(s) {
       var div = document.createElement("div");
       div.textContent = s;
