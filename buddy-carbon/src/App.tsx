@@ -9,6 +9,8 @@ const HomePage = lazy(() => import('./pages/HomePage'));
 const TodayPage = lazy(() => import('./pages/TodayPage'));
 const AskPage = lazy(() => import('./pages/AskPage'));
 const LifePage = lazy(() => import('./pages/LifePage'));
+const WorkPage = lazy(() => import('./pages/WorkPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const ConnectionsPage = lazy(() => import('./pages/ConnectionsPage'));
 
 function App() {
@@ -21,6 +23,8 @@ function App() {
           <Route path="/today" element={<TodayPage />} />
           <Route path="/ask" element={<AskPage />} />
           <Route path="/life" element={<LifePage />} />
+          <Route path="/work" element={<WorkPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="/connections" element={<ConnectionsPage />} />
           <Route path="*" element={<Navigate to={DEFAULT_ROUTE} replace />} />
         </Routes>

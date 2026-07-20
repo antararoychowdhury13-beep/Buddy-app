@@ -6,6 +6,7 @@ export type CarbonTheme = 'white' | 'g100';
 interface UiState {
   theme: CarbonTheme;
   toggleTheme: () => void;
+  setTheme: (theme: CarbonTheme) => void;
 }
 
 /**
@@ -17,6 +18,7 @@ export const useUiStore = create<UiState>()(
     (set) => ({
       theme: 'white',
       toggleTheme: () => set((state) => ({ theme: state.theme === 'white' ? 'g100' : 'white' })),
+      setTheme: (theme) => set({ theme }),
     }),
     { name: 'buddy.ui' },
   ),

@@ -1,0 +1,71 @@
+@use '@carbon/react/scss/spacing' as *;
+@use '@carbon/react/scss/theme' as *;
+@use '@carbon/react/scss/type' as *;
+@use '@carbon/react/scss/breakpoint' as *;
+
+.tile { margin-block-start: $spacing-05; }
+
+.kicker {
+  @include type-style('heading-compact-01');
+  color: $text-secondary;
+  margin-block-end: $spacing-05;
+}
+
+.stats { margin-block-end: 0; }
+
+.surfaceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: $spacing-04;
+
+  @include breakpoint('md') { grid-template-columns: repeat(4, 1fr); }
+}
+
+.surface {
+  min-block-size: 104px;
+  fill: $icon-primary;
+}
+
+.surfaceHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-end: $spacing-04;
+}
+
+.surfaceCount { @include type-style('heading-04'); }
+.surfaceLabel { @include type-style('heading-compact-01'); }
+.surfaceDetail { @include type-style('label-01'); color: $text-secondary; }
+
+.approval { padding: $spacing-05; }
+
+.approvalHead {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+  margin-block-end: $spacing-02;
+  fill: $support-success;
+}
+
+.approvalTitle { @include type-style('heading-compact-01'); flex: 1; }
+
+.insightRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-05;
+  padding-block: $spacing-04;
+  border-block-end: 1px solid $border-subtle-01;
+
+  &:last-child { border-block-end: none; }
+}
+
+.insightLabel { @include type-style('body-compact-01'); }
+.insightValue { @include type-style('heading-03'); }
+
+.section :global(.section__title) {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+  fill: $icon-secondary;
+}

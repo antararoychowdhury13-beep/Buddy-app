@@ -1,12 +1,27 @@
-@use '@carbon/react/scss/spacing' as *;
-@use '@carbon/react/scss/breakpoint' as *;
+@use '@carbon/react/scss/theme' as *;
 
-// The Content region already reserves space for the header. Add the SideNav
-// rail offset on large viewports where the rail is persistent.
+/**
+ * The shell is a full-height flex column: the top bar and bottom nav are
+ * flex-none and stay put, while the content region is the only scroller. This
+ * gives a true native-app feel with sticky top and bottom bars.
+ */
+.shell {
+  display: flex;
+  flex-direction: column;
+  block-size: 100vh;
+  block-size: 100dvh;
+  background: $background;
+}
+
+.shell > :global(header),
+.shell > :global(nav) {
+  flex: none;
+}
+
 .content {
-  min-block-size: calc(100vh - #{$spacing-09});
-
-  @include breakpoint('lg') {
-    margin-inline-start: $spacing-09;
-  }
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: $background;
 }

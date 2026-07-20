@@ -1,21 +1,12 @@
-import { type ReactNode } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import {
-  Content,
-  Header,
-  HeaderContainer,
-  HeaderGlobalAction,
-  HeaderGlobalBar,
-  HeaderMenuButton,
-  HeaderName,
-  SideNav,
-  SideNavItems,
-  SideNavLink,
-  SkipToContent,
-  Theme,
-} from '@carbon/react';
-import { Asleep, Light } from '@carbon/icons-react';
-import { NAV_ITEMS } from '../constants/navigation';
+import { useState, type ReactNode } from 'react';
+import { Modal, Theme } from '@carbon/react';
+import { TopBar } from '../components/shell/TopBar';
+import { BottomNav } from '../components/shell/BottomNav';
+import { SideMenu } from '../components/shell/SideMenu';
+import { GlobalSearch } from '../components/shell/GlobalSearch';
+import { NotificationPanel } from '../components/shell/NotificationPanel';
+import { ProfileMenu } from '../components/shell/ProfileMenu';
+import { useNotifications, unreadCount } from '../hooks/useNotifications';
 import { useUiStore } from '../hooks/useUiStore';
 import styles from './AppShell.module.scss';
 
@@ -24,73 +15,58 @@ interface AppShellProps {
 }
 
 /**
- * The Carbon UI Shell: a global Header, a collapsible SideNav, and the Content
- * region. The header stays fixed; the SideNav is a rail on large screens and a
- * slide-over on small screens (Carbon handles the responsive behaviour). A
- * SkipToContent link and a global theme toggle are provided.
+ * Mobile-app shell: a sticky top bar (hamburger · AI search · notifications ·
+ * profile), a scrollable content region, and a sticky bottom navigation with
+ * the elevated Ask Buddy action. The hamburger, search, notifications and
+ * profile each open their own Carbon surface. Everything is theme-aware.
  */
 export function AppShell({ children }: AppShellProps) {
-  const location = useLocation();
-  const theme = useUiStore((state) => state.theme);
-  const toggleTheme = useUiStore((state) => state.toggleTheme);
+  const theme = useUiStore((s) => s.theme);
+  const items = useNotifications((s) => s.items);
+  const unread = unreadCount(items);
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [notifsOpen, setNotifsOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
 
   return (
     <Theme theme={theme}>
-      <HeaderContainer
-        render={({ isSideNavExpanded, onClickSideNavExpand }) => (
-          <>
-            <Header aria-label="Buddy">
-              <SkipToContent />
-              <HeaderMenuButton
-                aria-label={isSideNavExpanded ? 'Close menu' : 'Open menu'}
-                onClick={onClickSideNavExpand}
-                isActive={isSideNavExpanded}
-                aria-expanded={isSideNavExpanded}
-              />
-              <HeaderName as={Link} to="/home" prefix="IBM">
-                Buddy
-              </HeaderName>
-              <HeaderGlobalBar>
-                <HeaderGlobalAction
-                  aria-label={theme === 'white' ? 'Switch to dark theme' : 'Switch to light theme'}
-                  onClick={toggleTheme}
-                  tooltipAlignment="end"
-                >
-                  {theme === 'white' ? <Asleep size={20} /> : <Light size={20} />}
-                </HeaderGlobalAction>
-              </HeaderGlobalBar>
-              <SideNav
-                aria-label="Primary navigation"
-                expanded={isSideNavExpanded}
-                onSideNavBlur={onClickSideNavExpand}
-                isPersistent
-              >
-                <SideNavItems>
-                  {NAV_ITEMS.map((item) => {
-                    const Icon = item.icon;
-                    const isActive = location.pathname.startsWith(item.path);
-                    return (
-                      <SideNavLink
-                        key={item.path}
-                        as={Link}
-                        to={item.path}
-                        renderIcon={Icon}
-                        isActive={isActive}
-                        aria-current={isActive ? 'page' : undefined}
-                      >
-                        {item.label}
-                      </SideNavLink>
-                    );
-                  })}
-                </SideNavItems>
-              </SideNav>
-            </Header>
-            <Content id="main-content" className={styles.content}>
-              {children}
-            </Content>
-          </>
-        )}
-      />
+      <div className={styles.shell}>
+        <TopBar
+          unread={unread}
+          onMenu={() => setMenuOpen(true)}
+          onSearch={() => setSearchOpen(true)}
+          onNotifications={() => setNotifsOpen(true)}
+          onProfile={() => setProfileOpen(true)}
+        />
+
+        <main id="main-content" className={styles.content}>
+          {children}
+        </main>
+
+        <BottomNav />
+
+        <SideMenu expanded={menuOpen} onClose={() => setMenuOpen(false)} onLogout={() => setLogoutOpen(true)} />
+        <GlobalSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
+        <NotificationPanel open={notifsOpen} onClose={() => setNotifsOpen(false)} />
+        <ProfileMenu open={profileOpen} onClose={() => setProfileOpen(false)} onLogout={() => setLogoutOpen(true)} />
+
+        <Modal
+          open={logoutOpen}
+          modalHeading="Sign out of Buddy?"
+          primaryButtonText="Sign out"
+          secondaryButtonText="Stay signed in"
+          danger
+          size="sm"
+          onRequestClose={() => setLogoutOpen(false)}
+          onSecondarySubmit={() => setLogoutOpen(false)}
+          onRequestSubmit={() => setLogoutOpen(false)}
+        >
+          <p>You&apos;ll need to sign in again to reach your plan, tasks and connected apps. This demo keeps your data locally.</p>
+        </Modal>
+      </div>
     </Theme>
   );
 }

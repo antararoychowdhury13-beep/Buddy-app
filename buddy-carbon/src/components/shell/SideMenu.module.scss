@@ -1,0 +1,28 @@
+@use '@carbon/react/scss/spacing' as *;
+@use '@carbon/react/scss/theme' as *;
+@use '@carbon/react/scss/type' as *;
+
+.side {
+  // Sit above the sticky top bar and fill the viewport height.
+  z-index: 8000;
+}
+
+.brandRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: $spacing-05;
+}
+
+.brand {
+  @include type-style('heading-03');
+}
+
+.brandSub {
+  @include type-style('label-01');
+  color: $text-secondary;
+}
+
+.logout {
+  :global(.cds--side-nav__link-text) { color: $text-error; }
+}

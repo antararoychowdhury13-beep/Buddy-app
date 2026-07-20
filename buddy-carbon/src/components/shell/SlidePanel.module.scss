@@ -1,0 +1,63 @@
+@use '@carbon/react/scss/spacing' as *;
+@use '@carbon/react/scss/theme' as *;
+@use '@carbon/react/scss/type' as *;
+@use '@carbon/react/scss/breakpoint' as *;
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 8500;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  inline-size: min(88vw, 24rem);
+  max-inline-size: 100%;
+  block-size: 100%;
+  background: $layer;
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.4);
+  animation: slideIn 160ms ease;
+}
+
+.end { margin-inline-start: auto; }
+.start { margin-inline-end: auto; }
+
+@keyframes slideIn {
+  from { transform: translateX(8%); opacity: 0.6; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.header {
+  position: sticky;
+  inset-block-start: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-03;
+  padding: $spacing-04 $spacing-03 $spacing-04 $spacing-05;
+  padding-block-start: max(#{$spacing-04}, env(safe-area-inset-top));
+  background: $layer;
+  border-block-end: 1px solid $border-subtle-01;
+  z-index: 1;
+}
+
+.title { @include type-style('heading-compact-02'); }
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: $spacing-02;
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding-block-end: max(#{$spacing-05}, env(safe-area-inset-bottom));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel { animation: none; }
+}
