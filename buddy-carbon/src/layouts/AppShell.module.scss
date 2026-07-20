@@ -1,0 +1,12 @@
+@use '@carbon/react/scss/spacing' as *;
+@use '@carbon/react/scss/breakpoint' as *;
+
+// The Content region already reserves space for the header. Add the SideNav
+// rail offset on large viewports where the rail is persistent.
+.content {
+  min-block-size: calc(100vh - #{$spacing-09});
+
+  @include breakpoint('lg') {
+    margin-inline-start: $spacing-09;
+  }
+}

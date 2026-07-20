@@ -1,0 +1,11 @@
+// Global stylesheet — IBM Carbon Design System.
+// Imports Carbon's reset, type, themes, grid and every component style.
+// The White theme is the default; the g100 (dark) theme is applied via the
+// <Theme> component in the shell. No hardcoded colours or spacing anywhere —
+// everything below the Carbon layer uses Carbon tokens.
+@use '@carbon/react';
+@use '@carbon/react/scss/grid';
+
+// Application-level layout tokens layered on top of Carbon — still using
+// Carbon's spacing and colour tokens, never raw values.
+@use './styles/app';
