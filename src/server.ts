@@ -2,7 +2,7 @@ import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import { db, getOrCreateSingleUser } from "./db.js";
+import { db, getOrCreateSingleUser, DEFAULT_USER_EMAIL, IS_DEMO } from "./db.js";
 import { applyFeedback } from "./trustScoreStore.js";
 import type { Domain, Insight, InsightRow, Tier } from "./types.js";
 import { toInsight } from "./types.js";
@@ -50,7 +50,10 @@ app.get("/api/home-ai/context", async (_req, res) => {
 });
 
 function requireEmail(): string {
-  const email = process.env.BUDDY_USER_EMAIL;
+  // In demo mode this resolves to the seeded demo user, so nothing has to be
+  // configured before the app is usable. With a real Supabase project set
+  // BUDDY_USER_EMAIL to pick the single user this prototype runs for.
+  const email = process.env.BUDDY_USER_EMAIL || DEFAULT_USER_EMAIL;
   if (!email) throw new Error("BUDDY_USER_EMAIL not set in .env");
   return email;
 }
