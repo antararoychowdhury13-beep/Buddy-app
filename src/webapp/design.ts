@@ -400,6 +400,101 @@ body.menu-open .drawer { transform: translateX(0); }
 .orb-lg.state-speaking .ring { border-color: var(--iris); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .orb-lg.state-thinking .ring { animation: none; } }
+
+/* ============================================================= Daily Brief home
+   The "Your day, already handled" home screen: date header + greeting orb,
+   segmented control, an AI Daily Brief hero card (stat strip + highlights),
+   attention/ignore sections, and a floating "tap to talk" voice orb. */
+
+/* Bell with unread badge */
+.bell-badge {
+  position: absolute; top: -3px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 9px; background: var(--alert); color: #fff; font-size: 9.5px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center; border: 2px solid var(--ink);
+}
+
+/* Greeting row + avatar orb */
+.greeting-row { display: flex; align-items: center; gap: 13px; margin-top: 8px; }
+.avatar-orb {
+  width: 46px; height: 46px; border-radius: 50%; flex-shrink: 0;
+  background: radial-gradient(circle at 34% 30%, #ffffff 0%, var(--buddy-accent-a) 44%, #241653 100%);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.12), var(--shadow-accent);
+}
+.greeting-row .hi { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+.greeting-row .sub { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-top: 1px; }
+
+/* Segmented control */
+.seg-row { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; gap: 10px; }
+.segmented {
+  display: inline-flex; gap: 4px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-pill); padding: 4px; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+}
+.segmented a { padding: 8px 16px; border-radius: var(--r-pill); font-size: 12.5px; font-weight: 700; color: var(--muted); transition: color var(--dur-fast) var(--ease); }
+.segmented a.active { background: var(--buddy-accent-gradient); color: #fff; }
+.seg-add { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 700; color: var(--buddy-accent-link); flex-shrink: 0; }
+
+/* AI Daily Brief hero card */
+.brief-hero { margin-top: 16px; }
+.brief-hero .hero-title { font-size: 21px; font-weight: 800; letter-spacing: -0.4px; margin: 8px 0 5px; }
+.brief-hero .hero-sub { font-size: 13.5px; font-weight: 600; color: var(--muted); line-height: 1.5; }
+
+/* 4-up stat strip inside the brief */
+.stat-strip {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin: 15px 0 4px;
+  background: var(--border); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden;
+}
+.stat-cell { background: rgba(255,255,255,0.03); padding: 12px 10px; }
+.stat-cell .v { font-size: 16.5px; font-weight: 800; letter-spacing: -0.3px; line-height: 1.1; }
+.stat-cell .k { font-size: 9.5px; font-weight: 700; color: var(--muted); margin-top: 4px; line-height: 1.25; text-transform: none; }
+.stat-cell .i { margin-top: 9px; }
+.stat-cell .i .i { width: 15px; height: 15px; }
+
+/* Brief highlight rows */
+.brief-item { display: flex; gap: 11px; align-items: flex-start; padding: 11px 0; }
+.brief-item + .brief-item { border-top: 1px solid var(--line-soft); }
+.brief-item .dot { width: 27px; height: 27px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.brief-item .t { font-size: 13.5px; font-weight: 700; line-height: 1.35; }
+.brief-item .s { font-size: 12px; font-weight: 500; color: var(--muted); margin-top: 2px; line-height: 1.45; }
+
+/* Section eyebrow header */
+.eyebrow-head { margin: 26px 0 12px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.eyebrow-head .label { color: var(--muted); }
+
+/* "Safely ignore" compact row */
+.ignore-row { display: flex; align-items: center; gap: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 11px 13px; margin-bottom: 8px; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.ignore-row .txt { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--mist); }
+.ignore-row .txt .d { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); margin-bottom: 2px; }
+
+/* ================================================= My Day — hour-by-hour timeline
+   Vertical rail with colored category nodes; each hour is a glass card with a
+   category icon tile, a status badge, description, and contextual actions. */
+.tl { position: relative; margin-top: 18px; padding-left: 64px; }
+.tl::before { content: ""; position: absolute; left: 52px; top: 10px; bottom: 10px; width: 2px; background: var(--line); }
+.tl-item { position: relative; margin-bottom: 16px; }
+.tl-node { position: absolute; left: -18px; top: 15px; width: 12px; height: 12px; border-radius: 50%; background: var(--cat-neutral); box-shadow: 0 0 0 4px var(--ink); }
+.tl-time { position: absolute; left: -64px; top: 13px; width: 44px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 700; color: var(--muted); }
+.tl-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 15px; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: var(--shadow-card); display: flex; gap: 13px; }
+.tl-card.now { border: 1.5px solid rgba(120,150,255,0.45); box-shadow: var(--shadow-active); }
+.tl-icon { width: 46px; height: 46px; border-radius: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.tl-icon .i { width: 20px; height: 20px; }
+.tl-body { flex: 1; min-width: 0; }
+.tl-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.tl-title { font-size: 16.5px; font-weight: 800; letter-spacing: -0.3px; line-height: 1.2; }
+.tl-badge { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; flex-shrink: 0; margin-top: 2px; white-space: nowrap; }
+.tl-desc { font-size: 13px; font-weight: 500; color: var(--mist); line-height: 1.5; margin-top: 7px; }
+.tl-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.tl-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 9px 13px; font-size: 12.5px; font-weight: 700; color: var(--text); cursor: pointer; }
+.tl-chip:active { transform: scale(0.975); }
+
+/* Category-filter segmented control on My Day */
+.filter-seg { display: flex; gap: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 4px; margin-top: 14px; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.filter-seg a { flex: 1; text-align: center; padding: 9px 8px; border-radius: var(--r-pill); font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.filter-seg a.active { background: var(--buddy-accent-gradient); color: #fff; }
+
+/* "A thought for today" closing card reuses the accent card. */
+.thought-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; opacity: 0.9; display: flex; align-items: center; gap: 7px; }
+.thought-quote { font-size: 21px; font-weight: 800; letter-spacing: -0.4px; line-height: 1.28; margin: 12px 0 10px; }
+.thought-attr { font-size: 12.5px; font-weight: 700; opacity: 0.85; }
 `;
 
 export const ICON_SPRITE = `<svg width="0" height="0" style="position:absolute" aria-hidden="true">
