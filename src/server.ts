@@ -15,6 +15,7 @@ import { renderShell } from "./webapp/shell.js";
 import { connectRouter, startGoogleOAuthCallbackServer } from "./webapp/connect.js";
 import {
   DOMAIN_META,
+  dateLabel,
   formatClockTime,
   relativeTime,
   safeInternalPath,
@@ -179,81 +180,127 @@ app.get("/", async (_req, res) => {
 
   const emailPrefix = user.email.split("@")[0];
   const displayName = user.display_name ?? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
+  const greeting = timeOfDayGreeting().replace(/,$/, "");
+
+  // --- Derive the Daily Brief's real numbers from the seeded/live data ---
+  const proactive = delivered.filter((i) => i.tier === "proactive");
+  const ambient = delivered.filter((i) => i.tier === "ambient");
+  const needsYou = [...proactive, ...ambient];
+  const sleepMatch = insights.map((i) => i.candidateText).join(" ").match(/(\d+)\s*h\s*(\d+)\s*m/i);
+  const sleepValue = sleepMatch ? `${sleepMatch[1]}h ${sleepMatch[2]}m` : "—";
+  const changeCount = proactive.length > 0 ? String(proactive.length) : "a few";
+
+  // Split an insight into a bold lead + muted remainder for the brief highlights.
+  const splitLead = (text: string): { lead: string; rest: string } => {
+    const m = text.match(/^(.*?[.!?])\s+(.*)$/s);
+    if (m) return { lead: m[1], rest: m[2] };
+    const dash = text.split(/\s+—\s+/);
+    if (dash.length > 1) return { lead: dash[0], rest: dash.slice(1).join(" — ") };
+    return { lead: text, rest: "" };
+  };
+
+  const statCell = (value: string, label: string, iconName: string, chip: string) => `
+    <div class="stat-cell">
+      <div class="v mono">${value}</div>
+      <div class="k">${label}</div>
+      <div class="i"><span class="chip ${chip}" style="width:22px;height:22px;border-radius:6px;background:transparent;">${icon(iconName, "i i-sm")}</span></div>
+    </div>`;
+
+  const briefHighlights = [...proactive, ...ambient].slice(0, 3);
+  const briefItemsHtml = briefHighlights
+    .map((i) => {
+      const meta = DOMAIN_META[i.domain];
+      const { lead, rest } = splitLead(i.candidateText);
+      return `
+      <div class="brief-item">
+        <div class="dot ${meta.chip}">${icon(meta.icon, "i i-sm")}</div>
+        <div style="flex:1; min-width:0;">
+          <div class="t">${escapeHtml(lead)}</div>
+          ${rest ? `<div class="s">${escapeHtml(rest)}</div>` : `<div class="s">${meta.label}</div>`}
+        </div>
+      </div>`;
+    })
+    .join("");
 
   const headerHtml = `
     <button class="icon-btn" id="menu-toggle" aria-label="Open menu">${icon("menu")}</button>
-    <div class="spacer">
-      <div style="font-size:14px; color:var(--mist);">${timeOfDayGreeting()}</div>
-      <div style="font-size:20px; font-weight:700;">${escapeHtml(displayName)}</div>
-      <div style="font-size:11.5px; color:var(--faint);">I've connected your world.</div>
+    <div class="spacer" style="text-align:center;">
+      <div class="label" style="letter-spacing:1.4px;">${dateLabel()}</div>
     </div>
-    <a href="/notifications" class="icon-btn" aria-label="Notifications">${icon("bell")}</a>`;
+    <a href="/notifications" class="icon-btn" aria-label="Notifications" style="position:relative;">
+      ${icon("bell")}${delivered.length > 0 ? `<span class="bell-badge">${delivered.length}</span>` : ""}
+    </a>`;
+
+  const briefCardHtml = briefing
+    ? `
+      <div class="card brief-hero">
+        <div class="eyebrow">${icon("sparkle", "i i-sm")} AI DAILY BRIEF</div>
+        <div class="hero-title">Your day is optimized.</div>
+        <div class="hero-sub">I've made ${changeCount} change${changeCount === "1" ? "" : "s"} to protect your time and focus.</div>
+        <div class="stat-strip">
+          ${statCell(sleepValue, "Sleep", "heart", "good")}
+          ${statCell(String(meetingsToday), "Meetings today", "calendar", "iris")}
+          ${statCell(String(needsYou.length), "Need you", "person", "rose")}
+          ${statCell(String(delivered.length), "AI summaries", "sparkle", "violet")}
+        </div>
+        ${briefItemsHtml}
+        <div style="display:flex; gap:8px; margin-top:14px;">
+          <button class="btn btn-primary listen-btn" type="button" data-text="${escapeHtml(briefing.composed_text)}" style="flex:1; justify-content:center;">${icon("play", "i i-sm")}Listen to brief</button>
+          <a href="/my-day" class="btn btn-ghost">${icon("doc", "i i-sm")}View details</a>
+        </div>
+      </div>`
+    : `<div class="card" style="margin-top:16px; color:var(--faint); font-size:13px;">No briefing yet — run <code>npm run ingest</code>.</div>`;
+
+  const attentionHtml =
+    needsYou.length > 0
+      ? `
+      <div class="eyebrow-head"><span class="label">Give your attention to</span>${needsYou.length > 3 ? `<a href="/notifications" style="font-size:12px;color:var(--buddy-accent-link);font-weight:700;">View all</a>` : ""}</div>
+      ${needsYou.slice(0, 3).map((i) => nudgeCardHtml(i, { showDetailsLink: true })).join("")}`
+      : "";
+
+  const ignoreHtml =
+    silent.length > 0
+      ? `
+      <div class="eyebrow-head"><span class="label">You can safely ignore</span><span style="font-size:11px;color:var(--faint);font-weight:600;">${silent.length} handled</span></div>
+      ${silent
+        .slice(0, 3)
+        .map((i) => {
+          const meta = DOMAIN_META[i.domain];
+          return `<div class="ignore-row">
+            <div class="dot ${meta.chip}" style="width:27px;height:27px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${icon(meta.icon, "i i-sm")}</div>
+            <div class="txt"><div class="d">${meta.label}</div>${escapeHtml(i.candidateText)}</div>
+          </div>`;
+        })
+        .join("")}`
+      : "";
 
   const bodyHtml = `
-    <a href="/chats" style="display:flex; align-items:center; gap:10px; background:var(--layer-01); border:1px solid var(--line); border-radius:var(--r-pill); padding:11px 14px; margin-top:6px; color:var(--faint);">
-      ${icon("search", "i i-sm")}<span style="font-size:13px; flex:1;">Ask Buddy anything…</span>
-    </a>
-    <div style="display:flex; gap:8px; margin-top:12px;">
-      <a href="/voice" class="btn btn-primary" style="flex:1; justify-content:center;">${icon("wave", "i i-sm")}Talk to Buddy</a>
-      <a href="/how-it-works" class="btn btn-ghost">${icon("play", "i i-sm")}How it works</a>
-    </div>
-
-    ${
-      briefing
-        ? `<div class="card" style="margin-top:20px;">
-            <div style="font-size:13px; line-height:1.6;" id="briefing-text">${escapeHtml(briefing.composed_text).replace(/\n/g, "<br/>")}</div>
-            <button class="btn btn-ghost btn-sm listen-btn" type="button" data-text="${escapeHtml(briefing.composed_text)}" style="margin-top:10px;">${icon("wave", "i i-sm")}Listen</button>
-          </div>`
-        : `<div class="card" style="margin-top:20px; color:var(--faint); font-size:13px;">No briefing yet — run <code>npm run ingest</code>.</div>`
-    }
-
-    <div class="section-head"><h2>Today at a glance</h2></div>
-    <div class="tile-grid">
-      <div class="tile">
-        <div class="chip iris">${icon("calendar", "i i-sm")}</div>
-        <div class="num mono">${meetingsToday}</div>
-        <div class="lbl">Meetings today</div>
-      </div>
-      <div class="tile">
-        <div class="chip good">${icon("check", "i i-sm")}</div>
-        <div class="num mono" style="color:var(--good)">${delivered.length}</div>
-        <div class="lbl">Delivered</div>
-      </div>
-      <div class="tile">
-        <div class="chip violet">${icon("grid", "i i-sm")}</div>
-        <div class="num mono">${silent.length}</div>
-        <div class="lbl">Stayed silent</div>
-        <div class="sub" style="color:var(--faint)">correctly held back</div>
-      </div>
-      <div class="tile">
-        <div class="chip warn">${icon("sliders", "i i-sm")}</div>
-        <div class="num mono">${avgConfidence !== null ? `${Math.round(avgConfidence * 100)}%` : "—"}</div>
-        <div class="lbl">Avg. confidence</div>
+    <div class="greeting-row">
+      <div class="avatar-orb"></div>
+      <div style="flex:1; min-width:0;">
+        <div class="hi">${greeting}, ${escapeHtml(displayName)}</div>
+        <div class="sub">I've already prepared your day.</div>
       </div>
     </div>
 
-    <div class="section-head"><h2>Top nudges for you</h2>${delivered.length > 5 ? `<a href="/notifications">View all</a>` : ""}</div>
-    ${delivered.length > 0 ? delivered.slice(0, 5).map((i) => nudgeCardHtml(i, { showDetailsLink: true })).join("") : `<div style="color:var(--faint); font-size:13px;">Nothing cleared the bar yet.</div>`}
-
-    ${
-      silent.length > 0
-        ? `<div class="section-head"><h2>Stayed quiet (${silent.length})</h2></div>
-           ${silent.slice(0, 3).map((i) => nudgeCardHtml(i)).join("")}`
-        : ""
-    }
-
-    <div class="card" style="margin-top:20px;">
-      <div style="font-size:13px; font-weight:600;">I've connected your world</div>
-      <div style="font-size:11px; color:var(--faint); margin-bottom:10px;">Everything in sync and in context.</div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        ${(connectors ?? [])
-          .map(
-            (c) =>
-              `<div class="chip ${c.type === "google_calendar" ? "iris" : "warn"}" style="width:32px; height:32px; border-radius:10px;" title="${c.type} — ${c.status}">${icon(c.type === "google_calendar" ? "calendar" : "cloud", "i i-sm")}</div>`
-          )
-          .join("")}
-        <a href="/me" class="chip" style="width:32px; height:32px; border-radius:10px; border:1px solid var(--line); color:var(--faint);">${icon("grid", "i i-sm")}</a>
+    <div class="seg-row">
+      <div class="segmented">
+        <a class="active">Today</a>
+        <a href="/my-day">This week</a>
       </div>
+      <a href="/chats" class="seg-add">${icon("send", "i i-sm")}Ask</a>
+    </div>
+
+    ${briefCardHtml}
+
+    ${attentionHtml}
+
+    ${ignoreHtml}
+
+    <div class="eyebrow-head"><span class="label">The day, already handled</span></div>
+    <div class="card">
+      <div style="font-size:13.5px; font-weight:600; line-height:1.55; color:var(--mist);">Everything important has been organized, prioritized, and prepared for you.${silent.length > 0 ? ` Buddy handled ${silent.length} more quietly today.` : ""}</div>
+      <a href="/how-it-works" style="display:inline-flex; align-items:center; gap:6px; margin-top:10px; font-size:12px; font-weight:700; color:var(--buddy-accent-link);">${icon("play", "i i-sm")}How Buddy decides</a>
     </div>
   `;
 

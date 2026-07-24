@@ -30,6 +30,14 @@ export function formatClockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+/** Header date label, e.g. "MONDAY · 21 JULY". */
+export function dateLabel(date = new Date()): string {
+  const weekday = date.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
+  const day = date.getDate();
+  const month = date.toLocaleDateString("en-US", { month: "long" }).toUpperCase();
+  return `${weekday} · ${day} ${month}`;
+}
+
 /** "Good day" is what a stranger says. A chief of staff knows what time it is. */
 export function timeOfDayGreeting(date = new Date()): string {
   const hour = date.getHours();
