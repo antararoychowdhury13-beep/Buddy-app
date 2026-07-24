@@ -4,16 +4,35 @@ A proactive assistant that scores candidate insights for confidence, tiers
 them (silent / passive / ambient / proactive), composes a daily briefing
 from whatever clears the bar, and can speak that briefing aloud on request.
 
-## Setup
+## Quick start (demo mode — no setup)
+
+```
+npm install
+npm run dev        # serves the app at http://localhost:3000
+```
+
+With no `.env` at all, Buddy boots in **demo mode**: an in-memory store seeded
+with a full, believable day (calendar, weather, nudges across every life
+domain, a composed briefing, per-domain trust history, remembered facts, and
+notification history). Every screen is populated immediately, confirm/dismiss
+and the Ask/Chat responder all work, and nothing external is required. This is
+the fastest way to see the whole app. Real integrations layer in on top — set
+the env vars below to replace the demo, one piece at a time.
+
+## Setup (real data)
 
 1. `npm install`
-2. Copy `.env.example` to `.env` and fill in:
-   - `SUPABASE_URL` / `SUPABASE_ANON_KEY` — the Postgres project backing everything
-   - `ANTHROPIC_API_KEY` — used to compose the daily briefing (starts with `sk-ant-`, not `sk-proj-`)
+2. Copy `.env.example` to `.env` and fill in what you want (all optional — see
+   the comments in that file):
+   - `SUPABASE_URL` / `SUPABASE_ANON_KEY` — set **both** to leave demo mode and
+     persist to a real Postgres project
+   - `ANTHROPIC_API_KEY` — turns on full conversational Ask/Chat and
+     LLM-composed briefings (starts with `sk-ant-`). Without it, Buddy answers
+     from your day's data with a built-in local responder.
    - `BUDDY_USER_EMAIL` — the single user this prototype runs for
    - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — only needed to connect Calendar (see below); identify the OAuth app itself, not a user's connection
 
-## Running
+## Running (with Supabase)
 
 ```
 npm run dev        # serves the app at http://localhost:3000
@@ -22,7 +41,34 @@ npm run ingest     # pull calendar/weather events, score them, compose a briefin
 
 Run `ingest` at least once so there's a briefing to display. Calendar and
 Weather each need to be connected first (from the Me page, or via
-`npm run auth:google` for Calendar) — see **Connectors** below.
+`npm run auth:google` for Calendar) — see **Connectors** below. (In demo mode
+none of this is needed — the seeded briefing and events are already there.)
+
+## Database schema (Supabase)
+
+The schema lives in `supabase/`:
+
+- `supabase/migrations/0001_initial_schema.sql` — every table the app uses,
+  with the `UNIQUE` constraints the app's upserts depend on.
+- `supabase/seed.sql` — optional; seeds the same demo day into a real database
+  so it isn't empty on first run (idempotent — only seeds once).
+
+Apply it either way:
+
+```
+# With the Supabase CLI (recommended):
+supabase link --project-ref <your-project-ref>
+supabase db push           # applies migrations
+# optionally: paste supabase/seed.sql into the SQL Editor, or `supabase db reset`
+
+# Or by hand: open the project's SQL Editor and run the two files in order
+# (0001_initial_schema.sql, then seed.sql).
+```
+
+Then set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.env` and restart — the app
+leaves demo mode and reads/writes real Postgres. (RLS is intentionally left off
+for this single-user prototype; see the note at the top of the migration before
+any multi-user use.)
 
 ## Connectors
 
