@@ -722,7 +722,7 @@ app.post("/facts/:id/delete", async (req, res) => {
 
 // ---------------------------------------------------------------- My Day
 
-app.get("/my-day", async (_req, res) => {
+app.get("/my-day", async (req, res) => {
   const user = await getOrCreateSingleUser(requireEmail());
   // Ingest can run repeatedly, and each run does two inserts (calendar, then
   // weather) a moment apart; group everything within 10s of the latest
@@ -747,35 +747,102 @@ app.get("/my-day", async (_req, res) => {
     }
   }
 
+  // Category filter (All / Professional / Personal), matching the reference.
+  const filter = req.query.filter === "professional" || req.query.filter === "personal" ? req.query.filter : "all";
+  const PROFESSIONAL = new Set<Domain>(["work", "finance"]);
+  const PERSONAL = new Set<Domain>(["family", "health", "commute", "other"]);
+  const visibleEvents = events.filter((e) =>
+    filter === "professional" ? PROFESSIONAL.has(e.domain as Domain) : filter === "personal" ? PERSONAL.has(e.domain as Domain) : true
+  );
+
+  // Category colors for the timeline node dots (design.md category dots).
+  const CAT_COLOR: Record<Domain, string> = {
+    work: "var(--cat-work)",
+    commute: "var(--cat-weather)",
+    health: "var(--cat-health)",
+    family: "var(--cat-family)",
+    finance: "var(--cat-money)",
+    other: "var(--cat-focus)",
+  };
+  const TIER_RANK: Record<string, number> = { proactive: 3, ambient: 2, passive: 1, silent: 0 };
+
+  // Status badge derived from what Buddy did with the hour — leads with the
+  // action, per the brand ("Buddy already acted").
+  const statusFor = (topTier: string | null, isWeather: boolean): { label: string; color: string; now: boolean } => {
+    if (topTier === "proactive") return { label: "Needs you", color: "var(--alert)", now: true };
+    if (topTier === "ambient") return { label: "Optimized", color: "var(--success)", now: false };
+    if (topTier === "passive") return { label: "FYI", color: "var(--info)", now: false };
+    if (isWeather) return { label: "Time sensitive", color: "var(--warning)", now: false };
+    return { label: "Scheduled", color: "var(--muted)", now: false };
+  };
+
   const headerHtml = `
     <button class="icon-btn" id="menu-toggle" aria-label="Open menu">${icon("menu")}</button>
-    <div class="spacer"><h1>My Day</h1><div class="mono" style="font-size:11px; color:var(--faint);">${new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</div></div>`;
+    <div class="spacer" style="text-align:center;"><div class="label" style="letter-spacing:1.4px;">${dateLabel()}</div></div>
+    <a href="/notifications" class="icon-btn" aria-label="Notifications">${icon("bell")}</a>`;
 
-  const itemsHtml = (events ?? [])
+  const filterSeg = `
+    <div class="filter-seg">
+      <a href="/my-day"${filter === "all" ? ' class="active"' : ""}>All</a>
+      <a href="/my-day?filter=professional"${filter === "professional" ? ' class="active"' : ""}>Professional</a>
+      <a href="/my-day?filter=personal"${filter === "personal" ? ' class="active"' : ""}>Personal</a>
+    </div>`;
+
+  const itemsHtml = visibleEvents
     .map((e) => {
       const raw = e.raw as Record<string, unknown>;
-      const title = e.type === "calendar_event" ? String(raw.summary ?? "Event") : `Weather: ${String(raw.condition ?? "forecast")} (${String(raw.window ?? "")})`;
-      const related = insightsByEventId.get(e.id) ?? [];
+      const isWeather = e.type !== "calendar_event";
+      const title = isWeather ? `${String(raw.condition ?? "Weather")}` : String(raw.summary ?? "Event");
       const meta = DOMAIN_META[e.domain as Domain];
-      const annotations = related
-        .map((i) => `<div style="font-size:11px; color:var(--mist); margin-top:4px;">${tierPillHtml(i.tier)} ${escapeHtml(i.candidateText)}</div>`)
-        .join("");
+      const related = (insightsByEventId.get(e.id) ?? []).sort((a, b) => (TIER_RANK[b.tier] ?? 0) - (TIER_RANK[a.tier] ?? 0));
+      const top = related[0] ?? null;
+      const status = statusFor(top?.tier ?? null, isWeather);
+      const desc = top
+        ? escapeHtml(top.candidateText)
+        : isWeather
+        ? escapeHtml(`${String(raw.condition ?? "Forecast")}${raw.window ? ` · ${String(raw.window)}` : ""}`)
+        : "On your calendar — nothing needed from you.";
+      const actions = top
+        ? `<div class="tl-actions">
+            <button class="tl-chip listen-btn" type="button" data-text="${escapeHtml(top.candidateText)}">${icon("play", "i i-sm")}Listen</button>
+            <a class="tl-chip" href="/insight/${top.id}">${icon("doc", "i i-sm")}Details</a>
+          </div>`
+        : "";
       return `
-      <div class="timeline-item">
-        <div class="timeline-time mono">${formatClockTime(e.occurred_at)}</div>
-        <div class="timeline-card" style="border-left-color:var(--${meta.chip === "iris" ? "iris" : meta.chip === "violet" ? "violet" : meta.chip === "good" ? "good" : meta.chip === "warn" ? "warn" : "rose"});">
-          <div class="t">${escapeHtml(title)}</div>
-          <div class="d">${meta.label}</div>
-          ${annotations}
+      <div class="tl-item">
+        <div class="tl-time mono">${formatClockTime(e.occurred_at)}</div>
+        <div class="tl-node" style="background:${CAT_COLOR[e.domain as Domain]};"></div>
+        <div class="tl-card${status.now ? " now" : ""}">
+          <div class="chip tl-icon ${meta.chip}">${icon(meta.icon)}</div>
+          <div class="tl-body">
+            <div class="tl-head">
+              <div class="tl-title">${escapeHtml(title)}</div>
+              <div class="tl-badge" style="color:${status.color};">${status.label}</div>
+            </div>
+            <div class="tl-desc">${desc}</div>
+            ${actions}
+          </div>
         </div>
       </div>`;
     })
     .join("");
 
+  const thoughtCard = `
+    <div class="card accent" style="margin-top:22px;">
+      <div class="thought-eyebrow">${icon("sparkle", "i i-sm")} A thought for today</div>
+      <div class="thought-quote">You don't have to do it all — you just have to do the next right thing. Buddy has the rest.</div>
+      <div class="thought-attr">— Your day, gently handled</div>
+    </div>`;
+
   const bodyHtml = `
-    <div class="timeline">
-      ${itemsHtml || `<div style="color:var(--faint); font-size:12.5px;">No events yet — run <code>npm run ingest</code>.</div>`}
-    </div>
+    ${filterSeg}
+    ${
+      visibleEvents.length > 0
+        ? `<div class="tl">${itemsHtml}</div>${thoughtCard}`
+        : `<div style="color:var(--faint); font-size:12.5px; margin-top:20px;">${
+            events.length === 0 ? "No events yet — run <code>npm run ingest</code>." : "Nothing in this view. Try <a href=\"/my-day\" style=\"color:var(--buddy-accent-link);\">All</a>."
+          }</div>`
+    }
   `;
 
   res.send(renderShell({ title: "My Day", activeTab: "myday", headerHtml, bodyHtml }));

@@ -465,6 +465,36 @@ body.menu-open .drawer { transform: translateX(0); }
 .ignore-row .txt { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--mist); }
 .ignore-row .txt .d { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); margin-bottom: 2px; }
 
+/* ================================================= My Day — hour-by-hour timeline
+   Vertical rail with colored category nodes; each hour is a glass card with a
+   category icon tile, a status badge, description, and contextual actions. */
+.tl { position: relative; margin-top: 18px; padding-left: 64px; }
+.tl::before { content: ""; position: absolute; left: 52px; top: 10px; bottom: 10px; width: 2px; background: var(--line); }
+.tl-item { position: relative; margin-bottom: 16px; }
+.tl-node { position: absolute; left: -18px; top: 15px; width: 12px; height: 12px; border-radius: 50%; background: var(--cat-neutral); box-shadow: 0 0 0 4px var(--ink); }
+.tl-time { position: absolute; left: -64px; top: 13px; width: 44px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 700; color: var(--muted); }
+.tl-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 15px; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: var(--shadow-card); display: flex; gap: 13px; }
+.tl-card.now { border: 1.5px solid rgba(120,150,255,0.45); box-shadow: var(--shadow-active); }
+.tl-icon { width: 46px; height: 46px; border-radius: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.tl-icon .i { width: 20px; height: 20px; }
+.tl-body { flex: 1; min-width: 0; }
+.tl-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.tl-title { font-size: 16.5px; font-weight: 800; letter-spacing: -0.3px; line-height: 1.2; }
+.tl-badge { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; flex-shrink: 0; margin-top: 2px; white-space: nowrap; }
+.tl-desc { font-size: 13px; font-weight: 500; color: var(--mist); line-height: 1.5; margin-top: 7px; }
+.tl-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.tl-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 9px 13px; font-size: 12.5px; font-weight: 700; color: var(--text); cursor: pointer; }
+.tl-chip:active { transform: scale(0.975); }
+
+/* Category-filter segmented control on My Day */
+.filter-seg { display: flex; gap: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 4px; margin-top: 14px; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.filter-seg a { flex: 1; text-align: center; padding: 9px 8px; border-radius: var(--r-pill); font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.filter-seg a.active { background: var(--buddy-accent-gradient); color: #fff; }
+
+/* "A thought for today" closing card reuses the accent card. */
+.thought-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; opacity: 0.9; display: flex; align-items: center; gap: 7px; }
+.thought-quote { font-size: 21px; font-weight: 800; letter-spacing: -0.4px; line-height: 1.28; margin: 12px 0 10px; }
+.thought-attr { font-size: 12.5px; font-weight: 700; opacity: 0.85; }
 `;
 
 export const ICON_SPRITE = `<svg width="0" height="0" style="position:absolute" aria-hidden="true">
