@@ -44,6 +44,32 @@ Weather each need to be connected first (from the Me page, or via
 `npm run auth:google` for Calendar) — see **Connectors** below. (In demo mode
 none of this is needed — the seeded briefing and events are already there.)
 
+## Database schema (Supabase)
+
+The schema lives in `supabase/`:
+
+- `supabase/migrations/0001_initial_schema.sql` — every table the app uses,
+  with the `UNIQUE` constraints the app's upserts depend on.
+- `supabase/seed.sql` — optional; seeds the same demo day into a real database
+  so it isn't empty on first run (idempotent — only seeds once).
+
+Apply it either way:
+
+```
+# With the Supabase CLI (recommended):
+supabase link --project-ref <your-project-ref>
+supabase db push           # applies migrations
+# optionally: paste supabase/seed.sql into the SQL Editor, or `supabase db reset`
+
+# Or by hand: open the project's SQL Editor and run the two files in order
+# (0001_initial_schema.sql, then seed.sql).
+```
+
+Then set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.env` and restart — the app
+leaves demo mode and reads/writes real Postgres. (RLS is intentionally left off
+for this single-user prototype; see the note at the top of the migration before
+any multi-user use.)
+
 ## Connectors
 
 Calendar and Weather credentials live in the `connector` table, not `.env`

@@ -19,6 +19,7 @@ type Row = Record<string, any>;
 type Filter =
   | { kind: "eq"; col: string; val: unknown }
   | { kind: "neq"; col: string; val: unknown }
+  | { kind: "in"; col: string; vals: unknown[] }
   | { kind: "notNull"; col: string };
 
 interface QueryResult {
@@ -96,6 +97,10 @@ class QueryBuilder implements PromiseLike<QueryResult> {
     this.filters.push({ kind: "neq", col, val });
     return this;
   }
+  in(col: string, vals: unknown[]): this {
+    this.filters.push({ kind: "in", col, vals });
+    return this;
+  }
   /** Supports the one shape used: .not("col", "is", null) -> "col is not null". */
   not(col: string, _op: string, _val: unknown): this {
     this.filters.push({ kind: "notNull", col });
@@ -131,6 +136,7 @@ class QueryBuilder implements PromiseLike<QueryResult> {
     return this.filters.every((f) => {
       if (f.kind === "eq") return row[f.col] === f.val;
       if (f.kind === "neq") return row[f.col] !== f.val;
+      if (f.kind === "in") return f.vals.includes(row[f.col]);
       return row[f.col] !== null && row[f.col] !== undefined;
     });
   }
