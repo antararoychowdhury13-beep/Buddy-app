@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 .cache/
+.DS_Store
 
 # Claude Code local settings (not app code)
 .claude/settings.local.json
